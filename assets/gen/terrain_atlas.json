@@ -1,0 +1,35 @@
+{
+  "atlas_w": 128,
+  "atlas_h": 256,
+  "tile_w": 24,
+  "tile_h": 24,
+  "terrain_cols": 3,
+  "terrain_rows": 3,
+  "resource_row": 3,
+  "unit_row": 4,
+  "unit_rows": 5,
+  "terrain": [
+    "grassland",
+    "plains",
+    "forest",
+    "hills",
+    "mountain",
+    "desert",
+    "tundra",
+    "coast",
+    "ocean"
+  ],
+  "resources": [
+    "horses",
+    "iron",
+    "stone",
+    "gems"
+  ],
+  "units": [
+    "settler",
+    "warrior",
+    "scout",
+    "city",
+    "worker"
+  ]
+}

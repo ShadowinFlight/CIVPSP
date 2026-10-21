@@ -1,0 +1,11 @@
+{
+  "atlas_w": 128,
+  "atlas_h": 128,
+  "cell_w": 8,
+  "cell_h": 14,
+  "cols": 16,
+  "rows": 8,
+  "first": 32,
+  "last": 126,
+  "font": "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf"
+}
