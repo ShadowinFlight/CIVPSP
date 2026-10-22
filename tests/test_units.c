@@ -261,12 +261,36 @@ static void test_world_start_and_vision(void) {
     CHECK(!map.tiles[0][0].explored);
 }
 
+static void test_difficulty_setup(void) {
+    Map_Generate(&map, 0x12345678u);
+
+    World_BeginWithDifficulty(&world, &map, WORLD_DIFFICULTY_EASY);
+    CHECK(world.difficulty == WORLD_DIFFICULTY_EASY);
+    CHECK(World_CountUnits(&world, WORLD_CIV_PLAYER) == 4);
+    CHECK(world.civs[1].treasury == WORLD_AI_START_TREASURY - 10);
+
+    World_BeginWithDifficulty(&world, &map, WORLD_DIFFICULTY_NORMAL);
+    CHECK(world.difficulty == WORLD_DIFFICULTY_NORMAL);
+    CHECK(World_CountUnits(&world, WORLD_CIV_PLAYER) == 3);
+    CHECK(world.civs[1].treasury == WORLD_AI_START_TREASURY);
+
+    World_BeginWithDifficulty(&world, &map, WORLD_DIFFICULTY_HARD);
+    CHECK(world.difficulty == WORLD_DIFFICULTY_HARD);
+    CHECK(World_CountUnits(&world, WORLD_CIV_PLAYER) == 3);
+    CHECK(world.civs[1].treasury == WORLD_AI_START_TREASURY + 20);
+    for (int civ = 1; civ <= WORLD_AI_COUNT; civ++) {
+        CHECK(World_CountUnits(&world, civ) >= 3);
+    }
+    CHECK(World_CountUnits(&world, WORLD_CIV_BARBARIAN) >= 2);
+}
+
 int main(void) {
     test_movement_costs();
     test_unit_movement();
     test_city_founding();
     test_world_founding_and_turn();
     test_world_start_and_vision();
+    test_difficulty_setup();
 
     if (failures == 0) {
         printf("PASS: unit movement, city founding, turns, and start setup\n");

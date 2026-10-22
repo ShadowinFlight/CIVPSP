@@ -190,9 +190,9 @@ def generate_pic1() -> None:
     draw.line([164, 180, w - 164, 180], fill=(216, 178, 92, 150), width=1)
     draw.text((w // 2, 198), "探索 · 建设 · 外交", font=tag_font,
               fill=(210, 218, 206, 230), anchor="mm")
-    draw.text((30, h - 28), "V0.1 DEV", font=small_font,
+    draw.text((30, h - 28), "V0.2.2 DEV", font=small_font,
               fill=(174, 190, 180, 180), anchor="ls")
-    draw.text((w - 30, h - 28), "V0.1 BUILD", font=small_font,
+    draw.text((w - 30, h - 28), "V0.2.2 BUILD", font=small_font,
               fill=(174, 190, 180, 180), anchor="rs")
 
     img.save(SRC_DIR / "pic1.png")

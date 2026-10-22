@@ -247,6 +247,23 @@ static void test_alliance_victory_resets_on_ai_war(void) {
     CHECK(world.alliance_victory_turns == 0);
 }
 
+static void test_denounce(void) {
+    setup();
+    CHECK(World_Relation(&world, 0, 1) == 0);
+    CHECK(Diplomacy_CanDenounce(&world, 1));
+    CHECK(Diplomacy_Denounce(&world, 1) == DIPLO_DENOUNCE_PENALTY);
+    CHECK(World_Relation(&world, 0, 1) == -DIPLO_DENOUNCE_PENALTY);
+    CHECK(!Diplomacy_CanDenounce(&world, 1));
+    CHECK(Diplomacy_Denounce(&world, 1) == DIPLO_ERR_STATE);
+
+    Diplomacy_ProcessTurn(&world);
+    CHECK(Diplomacy_CanDenounce(&world, 1));
+    CHECK(Diplomacy_Denounce(&world, 1) == DIPLO_DENOUNCE_PENALTY);
+    CHECK(World_Relation(&world, 0, 1) == -DIPLO_DENOUNCE_PENALTY * 2);
+    CHECK(Diplomacy_CanDenounce(&world, 2));
+    CHECK(!Diplomacy_CanDenounce(&world, 1));
+}
+
 static void test_treaty_blocks_combat(void) {
     setup();
     world.treasury = 25;
@@ -276,6 +293,7 @@ int main(void) {
     test_diplomatic_victory_countdown();
     test_alliance_victory_resets_on_ai_war();
     test_treaty_blocks_combat();
+    test_denounce();
 
     if (failures == 0) {
         printf("PASS: relations, treaties, gifts, AI proposals, and diplomatic victory\n");

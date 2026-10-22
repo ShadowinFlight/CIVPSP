@@ -3,6 +3,7 @@
 
 #include "city.h"
 #include "combat.h"
+#include "data.h"
 #include "map.h"
 #include "unit.h"
 #include "world.h"
@@ -120,38 +121,111 @@ static void test_terrain_and_city_defense(void) {
     CHECK(world.units.units[attacker].hp == 70);
 }
 
-static void test_city_capture(void) {
+static void test_city_assault(void) {
     fresh_world();
     int city_index = -1;
     CHECK(City_TryFound(&world.cities, &map, 1, 12, 10, &city_index)
           == CITY_FOUND_OK);
+    City *city = &world.cities.cities[city_index];
+    CHECK(city->hp == CITY_HP_MAX);
+    CHECK(city->defense == CITY_DEFENSE_BASE);
+    CHECK(city->defense_max == CITY_DEFENSE_BASE);
+
     int attacker = Unit_Spawn(&world.units, UNIT_WARRIOR, 0, 11, 10);
-    CHECK(Combat_CanCaptureCity(&world, &map, attacker, city_index)
+    CHECK(Combat_CanAttackCity(&world, &map, attacker, city_index)
           == COMBAT_OK);
     CHECK(!World_AreAtWar(&world, 0, 1));
 
     CombatResult result;
-    CHECK(Combat_CaptureCity(&world, &map, attacker, city_index, &result)
+    CHECK(Combat_AttackCity(&world, &map, attacker, city_index, &result)
+          == COMBAT_OK);
+    CHECK(!result.city_captured);
+    CHECK(result.city_defense_damage > 0);
+    CHECK(result.city_hp_damage == 0);
+    CHECK(city->defense == CITY_DEFENSE_BASE - result.city_defense_damage);
+    CHECK(city->hp == CITY_HP_MAX);
+    CHECK(city->owner == 1);
+    CHECK(world.units.units[attacker].moves_left == 0);
+    CHECK(world.units.units[attacker].x == 11);
+    CHECK(world.units.units[attacker].y == 10);
+    CHECK(World_AreAtWar(&world, 0, 1));
+
+    /* Deplete the defense pool, then knock the city down to one HP. */
+    city->defense = 0;
+    city->hp = 1;
+    world.units.units[attacker].moves_left = 3;
+    CHECK(Combat_AttackCity(&world, &map, attacker, city_index, &result)
           == COMBAT_OK);
     CHECK(result.city_captured);
-    CHECK(world.cities.cities[city_index].owner == 0);
+    CHECK(result.city_hp_damage == 1);
+    CHECK(city->owner == 0);
+    CHECK(city->hp == CITY_HP_MAX);
+    CHECK(city->defense == CITY_DEFENSE_BASE);
     CHECK(world.units.units[attacker].x == 12);
     CHECK(world.units.units[attacker].y == 10);
     CHECK(world.units.units[attacker].moves_left == 0);
     CHECK(world.cities_captured == 1);
     CHECK(world.player_founded);
-    CHECK(World_AreAtWar(&world, 0, 1));
+}
 
+static void test_garrison_shields_city(void) {
     fresh_world();
+    int city_index = -1;
     CHECK(City_TryFound(&world.cities, &map, 1, 12, 10, &city_index)
           == CITY_FOUND_OK);
+    City *city = &world.cities.cities[city_index];
+    int city_hp = city->hp;
+    int city_defense = city->defense;
     int garrison = Unit_Spawn(&world.units, UNIT_WARRIOR, 1, 12, 10);
-    attacker = Unit_Spawn(&world.units, UNIT_WARRIOR, 0, 11, 10);
-    CHECK(Combat_CanCaptureCity(&world, &map, attacker, city_index)
+    int attacker = Unit_Spawn(&world.units, UNIT_WARRIOR, 0, 11, 10);
+    CHECK(Combat_CanAttackCity(&world, &map, attacker, city_index)
           == COMBAT_ERR_DEFENDED);
+
+    world.units.units[garrison].hp = 1;
     CHECK(Combat_AttackUnit(&world, &map, attacker, garrison, NULL)
           == COMBAT_OK);
-    CHECK(world.units.units[garrison].hp == 75);
+    CHECK(world.units.count == 1);
+    CHECK(city->owner == 1);
+    CHECK(city->hp == city_hp);
+    CHECK(city->defense == city_defense);
+    CHECK(world.units.units[attacker].x == 11);
+    CHECK(world.units.units[attacker].y == 10);
+    attacker = Unit_IndexOfAt(&world.units, 11, 10);
+    CHECK(attacker >= 0);
+    world.units.units[attacker].moves_left = 3;
+    CHECK(Combat_CanAttackCity(&world, &map, attacker, city_index)
+          == COMBAT_OK);
+}
+
+static void test_walls_repair_and_regen(void) {
+    fresh_world();
+    int city_index = -1;
+    CHECK(City_TryFound(&world.cities, &map, 1, 12, 10, &city_index)
+          == CITY_FOUND_OK);
+    City *city = &world.cities.cities[city_index];
+
+    CHECK(City_RepairDefense(city) == 0);
+    city->defense = 50;
+    CHECK(City_RepairDefense(city) == CITY_REPAIR_BASE);
+    CHECK(city->defense == 50 + CITY_REPAIR_BASE);
+
+    city->buildings = (uint16_t)(1u << BUILDING_WALLS);
+    City_UpdateCombat(city);
+    CHECK(city->defense_max == CITY_WALL_DEFENSE);
+    CHECK(city->defense == 75);          /* raising the cap does not heal */
+    CHECK(City_RepairDefense(city) == CITY_REPAIR_WALL);
+    CHECK(city->defense == 75 + CITY_REPAIR_WALL);
+    city->defense = city->defense_max;
+    CHECK(City_RepairDefense(city) == 0);
+
+    city->hp = 40;
+    city->last_hit_turn = 7;
+    City_RecoverHP(city, 7);
+    CHECK(city->hp == 40);
+    City_RecoverHP(city, 8);
+    CHECK(city->hp == 40 + CITY_HP_REGEN);
+    City_RecoverHP(city, 9);
+    CHECK(city->hp == 40 + CITY_HP_REGEN * 2);
 }
 
 static void test_game_over_conditions(void) {
@@ -180,11 +254,13 @@ int main(void) {
     test_attack_counter_and_death();
     test_errors_and_civilian();
     test_terrain_and_city_defense();
-    test_city_capture();
+    test_city_assault();
+    test_garrison_shields_city();
+    test_walls_repair_and_regen();
     test_game_over_conditions();
 
     if (failures == 0) {
-        printf("PASS: combat damage, defense, death, and city capture\n");
+        printf("PASS: combat, city assault, garrison, walls, repair, and regen\n");
         return 0;
     }
     fprintf(stderr, "%d check(s) failed\n", failures);
