@@ -7,13 +7,24 @@ current.
 
 - Path: `/home/zhang/pspGameDev/civpsp`
 - Plan: `PROJECT_PLAN.md`
-- Current release: **V0.1, first GitHub development release (post-M9.12)**.
-  Complete 4X game, Chinese/English UI, 30-tech tree, diplomacy, saves,
-  minimap, audio, 12-page manual, civilization colors, menu transitions, and
-  release artwork. PPSSPP validated; the latest package still needs a final
-  PSP 1000 hardware pass. Internal M6–M9 tags remain pending; M5 is tagged
-  `m5`; M4.1 is tagged `m4.1` after its PSP 1000 smoke test.
-- Release package: `release/v0.1/`; notes: `UPDATE.md`; public README: `README.md`.
+- Current release: **V0.2.2, fog-of-war HUD fix**; tag `v0.2.2` marks
+  this snapshot. V0.2.1 is the previous release at commit `3be14b6`, tag
+  `v0.2.1`; V0.2 is at `c733769`, tag `v0.2`; V0.1 is at `0065c61`, tag `v0.1`.
+- Release package: `release/v0.2.2/` (`EBOOT.PBP`, `civpsp-v0.2.2.zip`,
+  `SHA256SUMS`); notes: `UPDATE.md` and `UPDATE.en.md`; public README:
+  `README.md` and `README.en.md`.
+- Bilingual docs: `README.md` / `UPDATE.md` are Simplified Chinese;
+  `README.en.md` / `UPDATE.en.md` are English. Keep both language selectors
+  and cross-links in sync.
+- V0.2.2 stops the bottom status bar and tile info panel from showing enemy
+  units on non-visible tiles and cities on unexplored tiles. V0.2.1 adds a
+  centered turn-start briefing for AI/end-turn battles and diplomacy;
+  player-initiated attacks keep
+  the existing bottom toast. The city overview shows only HP and the
+  damage-absorbing `城防` pool, while the old `City_Defense` strength still
+  affects damage internally. The briefing queue is transient and is not saved.
+  `v0.2` and `v0.2.1` and their release directories remain at their original
+  released states.
 - M0: `71408a2` (tag `m0`)
 - M1: `4272caa` (tag `m1` on `b88ffd7`)
 - M1.1 map tuning: `3a51f87`
@@ -35,7 +46,7 @@ current.
 export PATH=$PATH:/home/zhang/pspdev/bin
 cd /home/zhang/pspGameDev/civpsp
 make clean && make
-make test          # 13 host suites; no PSP required
+make test          # 14 host suites; no PSP required
 ```
 
 - `civpsp.elf` for PPSSPP.
@@ -53,7 +64,105 @@ Use the absolute path to `EBOOT.PBP` to smoke-test the packaged build.
 
 ## What works
 
-### M9 (implementation complete, PPSSPP validated, PSP 1000 pending)
+### V0.2.2 (implementation complete, release packaged)
+
+- `src/mapview.c`: the bottom status bar and tile info panel now hide a rival
+  unit unless its tile is currently visible. Player-owned units remain listed
+  even if vision has not been refreshed yet. An unexplored tile also hides its
+  city entry.
+- Unit sprites and the minimap already respected fog; this fixes the separate
+  cursor status-bar/panel path that leaked unit type, owner, HP, and moves.
+- Validation: `make -j4` and `make test` pass with 14 host suites plus
+  i18n/audio checks. PPSSPP boot log reports `CIVITAS PSP V0.2.2`; the original
+  leak was found on PSP 1000, so a hardware retest of the status bar and panel
+  is the remaining visual check.
+
+### V0.2.1 (historical; release packaged)
+
+- `src/turn_report.*`: a 32-event transient queue records AI/end-turn unit
+  battles, city assaults, war declarations, peace, and AI proposals. Each
+  battle stores the tile, owners, unit types, damage/counter damage, deaths,
+  city defense/HP damage, and capture result.
+- `src/ai.c`: AI attacks call the report recorder directly after combat;
+  battles involving the player are always recorded, while AI-vs-AI battles are
+  recorded only when the battle tile is visible to the player. The same logic
+  covers barbarian attacks.
+- `src/diplomacy.c` / `src/ai.c`: AI war, peace, and proposal paths record
+  diplomatic events. Player-initiated combat and diplomacy keep their existing
+  bottom toast/messages.
+- `src/app.c`: after any end turn (map or city screen), a centered briefing
+  opens if the queue has events. It shows three events per page, uses
+  Left/Right to page, and Cross/Circle to dismiss. The queue is cleared at
+  `World_EndTurn` start, on new game/load, and on dismissal.
+- `assets/strings.csv`: 14 `REPORT_*` strings; current source has 512 IDs and
+  564 Chinese glyphs. `tests/test_turn_report.c` covers queue contents,
+  capacity, and clearing.
+- Validation: `make -j4` and `make test` pass with 14 host suites plus
+  i18n/audio checks. The packaged V0.2.1 ELF loaded a fixture with an adjacent
+  AI warrior at war and ended the turn; the log recorded
+  `ai combat ... dmg=30 counter=30`, `report: open turn=2 events=1`, and
+  `report: dismissed turn=2` after Cross. WSLg captures are still black, so
+  this validates the flow and log path, not the rendered panel.
+
+### V0.2 (implementation complete, host tests pass, PPSSPP smoke-tested)
+
+- `src/city.*`: `City` carries `hp`, `defense`, `defense_max`, and
+  `last_hit_turn`. Base HP/defense are 100, Walls raise the defense cap to
+  150, worker repair is +25 normally / +15 with Walls, and defense has no
+  passive regeneration. `City_RecoverHP` runs for every city after all player
+  and AI attacks at `World_EndTurn`; an unhit city gains +10 HP.
+- `src/combat.*`: `Combat_CanAttackCity` rejects a defended city with
+  `COMBAT_ERR_DEFENDED`; `Combat_AttackCity` drains defense before HP and
+  captures only at 0 HP. Killing a garrison never captures or advances into a
+  city. The legacy capture helpers now route through the full assault.
+- `src/world.*`: `World_BeginWithDifficulty` applies Easy/Normal/Hard starts;
+  `World_CaptureCity` resets captured cities to full HP/defense; turn order is
+  production → AI → city HP recovery → diplomacy → next turn; `World_NextUnit`
+  and `World_NextUnitWithMoves` are used by `R`; map and city-screen endings
+  share the Classic limit.
+- `src/ai.c`: AI armies besiege cities with the same assault rules. Hard gives
+  each rival an extra warrior and +20 treasury, earlier/wider war checks, and
+  faster/higher-cap barbarians. Easy adds a player warrior, starts AI with 10
+  less gold, delays wars, and reduces barbarian pressure.
+- `src/app.c`: New Game has Difficulty (Easy/Normal/Hard) and Mode
+  (Classic/Endless). Classic offers 100/200/300 turns; Endless stores zero
+  limit. Timed mode and the wall-clock timer were removed. Save metadata shows
+  mode/limit/difficulty rather than remaining seconds.
+- `src/mapview.c`: `L` toggles the minimap without a chord, `R` cycles player
+  units that still have movement, and analog camera panning updates the
+  selection tile to the view center. Worker action menu includes Repair City
+  Defense for a worker on or next to a city; assault results show defense and HP damage.
+- `src/diplomacy.*` / `diplomacyview.c`: Denounce costs 8 relation and is
+  limited to once per rival per turn, reset in `Diplomacy_ProcessTurn`; the
+  action menu was compacted to fit the extra row.
+- `src/cityview.c`: Science is era-grouped with era completion counts, costs,
+  prerequisites, and unlocks; `L/R` jumps between eras. The city overview and
+  Science layout fit within the 480×272 right panel.
+- `src/save.*`: save v3 adds city combat fields, difficulty, and denounce
+  state. v2 migration is explicit: Standard→Classic 200, Timed→Endless, full
+  city combat, Normal difficulty. Legacy unit/city pool counts are
+  bounds-checked before conversion; v3 round-trips preserve all new fields.
+- `assets/strings.csv` and generated assets: new mode/difficulty/denounce/era/
+  siege strings, 498 IDs, 561 Chinese glyphs in a 512×512 atlas in the V0.2
+  package; V0.2.1 report strings bring it to 512 IDs and 564 glyphs. The V0.2
+  package labels are `V0.2 DEV` / `V0.2 BUILD`; V0.2.1 uses `V0.2.1` labels.
+- `tests/test_combat.c`, `test_save.c`, `test_units.c`, `test_diplomacy.c`:
+  city assault, garrison shielding, Walls/repair/HP recovery, difficulty
+  starts, denouncement, v3 round-trip, and v2 migration. The V0.2 package gate
+  had 13 host suites; V0.2.1 adds `test_turn_report` (14) plus i18n/audio
+  checks.
+- PPSSPP functional smoke test (no screenshots; WSLg X11 captures are black):
+  started Hard/Classic 300 (17 units, 3 cities, difficulty 2); toggled the
+  minimap with `L`; cycled a unit with `R`; founded a city; opened the city
+  screen and Science tab; denounced Borea (`relation 0->-8`, action 9); loaded
+  a v3 save with an ungarrisoned city and captured it at 0 HP; loaded a v3 save
+  with a garrison, killed the garrison without capturing, ended the turn, and
+  captured the city on the next assault. A generated v2 Standard save loaded as
+  Classic 200, turn 42, Normal difficulty. This validates the functional paths,
+  not the rendered layouts; visual checks remain for hardware or a working
+  screenshot path.
+
+### M9 (historical; implementation complete, PPSSPP validated, PSP 1000 pending)
 
 - `tools/gen_font.py` / `tools/pack_atlas.py` / `src/gen/font_zh.h`: 512×256
   RGBA Chinese atlas with 548 glyphs. ASCII uses 8px advance, CJK 16px;
@@ -431,121 +540,125 @@ Use the absolute path to `EBOOT.PBP` to smoke-test the packaged build.
 
 ## Known issues
 
-- M7 saves are raw version-2 struct snapshots and only guarantee compatibility
-  with the same build; there is no migration path yet. Save overwrite has no
-  confirmation and autosave is overwritten every turn.
-- Science victory uses all 18 currently available techs; the planned 30-tech
-  tree remains future work. Score victory is evaluated only when a timed game
-  expires. AI civilizations do not research, so their scores have no tech
-  component.
-- The save files are plain files under `SAVEDATA` (no `PARAM.SFO`/save icon),
-  so the PSP system save manager may not display them.
-- City HP/ranged attacks/siege, razing, AI research, and AI workers remain
-  unimplemented. AI expansion/combat is intentionally light.
-- The tech tree has 18 of the planned 30 techs across 4 eras; adding rows is
-  data-only.
-- Improvement construction is instant and consumes all worker movement. No
-  multi-turn work timer, worker automation, or pillaging yet.
-- Building upkeep (1–2) plus unit upkeep is tight for a one-city economy;
-  Market +4 is the intended offset.
-- Map Circle with no unit selected opens the pause menu; Circle again
-  resumes. A selected unit is deselected first.
-- Cross on a city tile opens the city screen; Triangle prefers the unit action
-  menu, so workers/garrisons can act while standing in a city.
-- Tile purchase/border uses 8-way adjacency (diagonal corners allowed).
-- Water blocking is still only host-tested (no guaranteed water near start).
-- M9 ships Chinese by default with an English toggle in Options; the
-  translation/font is generated from `assets/strings.csv`.
-- Under WSLg, XTest keyboard input works after `XSetInputFocus` on the current
-  `CIVITAS` window (`xwininfo -root -tree`; the ID and 960×532/544 size change
-  per launch). The PPSSPP WebSocket debugger can get stuck in `CLOSE_WAIT`, so
-  XTest is the reliable automation path.
-- City capture by the player and the victory overlay are host-tested but not
-  yet exercised end-to-end in PPSSPP.
-- Audio is synthesized and mixed in software; volume/quality and the audio
-  thread need a PSP 1000 listening pass. Trade is gold-only, open borders share
-  vision rather than gating movement, and NAP/open borders have no renewal UI.
-  M8 AI research is a derived one-tech-per-8-turns abstraction; science
-  projects are three late techs; the Science list is flat rather than
-  era-grouped. The minimap is collapsed by default with an L+R shortcut and a
-  visible button; no settings-menu toggle yet.
+- V0.2.2 package has not yet had a final PSP 1000 hardware pass. PPSSPP is the
+  primary target; do not describe hardware validation as complete.
+- Save compatibility starts at v2. Pre-v2 development snapshots are rejected;
+  v2 Standard migrates to Classic 200 and v2 Timed migrates to Endless.
+- Saves are raw fixed-layout files under `SAVEDATA` with a checksum, not a
+  full `PARAM.SFO` savedata package, so the PSP save manager may not list them.
+  Manual overwrite has no confirmation; autosave is replaced each turn.
+- City assault has no ranged attack or siege engine; the same adjacent army
+  must defeat the garrison and then attack the city over multiple turns.
+- Defense never regenerates; only a worker on or next to the city can repair it. A captured
+  city starts at full HP/defense with population reduced by one.
+- No naval units; coast/ocean remain barriers. Trade is gold-only; open
+  borders share vision but do not gate movement. No resource trading,
+  pillaging, worker automation, or multi-turn improvements.
+- AI expansion and combat remain intentionally light. Difficulty changes
+  starting units, AI treasury, war timing/relation thresholds, and barbarian
+  spawning; it is not a full AI production/combat handicap yet.
+- Endless has no turn limit. Classic resolves by score at the selected
+  100/200/300-turn limit; conquest/science/diplomacy can still end earlier.
+- The README still uses a V0.1 main-menu screenshot; new V0.2.2 screenshots have
+  not been captured.
+- The minimap toggle is `L` only; there is no settings-menu option. Audio has
+  one active SFX voice plus the ambient loop.
 
 ## Next tasks
 
-1. Run the combined PSP 1000 checklist below on the packaged `EBOOT.PBP`.
-2. If it passes, tag `m6` on `ea5f018`, `m7` on `ee02b3a`, `m8` on `33eb44c`,
-   and `m9` on `5b4141e`. If hardware exposes an issue, fix it and repeat the
-   host/PPSSPP gates.
-3. Post-M9 polish: era-grouped Science tree, worker work timer,
-   border-movement gating, resource trading, and release packaging.
+1. Run the V0.2.2 checklist below on PSP 1000 hardware if available. This is
+   the only remaining release gate; PPSSPP functional smoke already passed.
+2. Capture V0.2.2 screenshots once a working capture path is available, and
+   replace the V0.1 main-menu image in both READMEs.
+3. Post-V0.2.2 candidates: worker work timer, ranged/siege units, border
+   movement gating, resource trading, richer difficulty AI bonuses, and
+   visual/layout polish from hardware feedback.
+4. For any later change: run `make assets` after string/art edits, then
+   `make -j4 && make test`, rebuild the package, and verify the ZIP and
+   `SHA256SUMS`.
 
-### Combined PSP 1000 checklist (analog + M6–M9)
+### V0.2.2 PSP 1000 / PPSSPP checklist
 
-1. Boot the packaged `EBOOT.PBP`; confirm the log version is M9, the main menu
-   is in Chinese, and the map camera does not drift with the stick released.
-   Use Pause → 校准摇杆, then confirm no crawl.
-2. Main menu → 游戏手册: verify all 12 pages with LEFT/RIGHT and Circle
-   returns; check pages 1, 6, 9, and 12 for readability.
-3. Options → 语言: switch between 中文 and 英文, then switch back. Confirm
-   both fonts render and menus fit. Toggle 音乐 on/off and confirm the ambient
-   track starts/stops while SFX remain.
-4. Start a Standard game. Confirm the map bottom shows `回合 1/200`, the
-   bottom-right `小地图 L+R` button appears, L+R opens a 114×86 minimap with
-   explored terrain/city markers/camera viewport, and there is no timed clock.
-   Observe the short fade/slide when entering menus and the gold selection
-   glow while moving through Options/Pause.
-5. Found a city, open it, and check all five tabs. In 科研, scroll through the
-   30-tech list; confirm the selection bar/detail line and `项目 0/3`. Select a
-   tech and end a turn from the city screen; confirm autosave.
-6. M6: open diplomacy with Start; send a gift, sign a NAP, open borders, trade,
-   and (if relation permits) an alliance; run 10 turns and confirm trade
-   payments/treaty expiry.
-7. M7: Pause → 保存游戏 → slot 1; load slot 1; load from the main menu.
-   Confirm turn/score/time metadata. Pause → 游戏手册 uses the same 12-page
-   manual.
-8. M8: load an old M7/M8 save (slot 2 or 3 if present). Confirm it loads and
-   the M9 UI appears.
-9. Standard ending: the turn-200 score path is already validated in PPSSPP
-   with a turn-200 save. On hardware, confirm `回合 n/200` and end a normal
-   turn to verify autosave. A full 200-turn run is optional.
-10. From the PSP XMB, inspect the ICON0/PIC1 artwork (if installed in
-    `PSP/GAME/CIVPSP/`); confirm the new gradient/compass/skyline art appears.
-11. Quit to menu and power off cleanly; report any crash, soft lock, visual
-    overflow, missing Chinese glyph, audio glitch, or input lag.
+1. Boot the packaged `EBOOT.PBP`; confirm the log says `CIVITAS PSP V0.2.2`,
+   the Chinese main menu appears, and ICON0/PIC1 show `V0.2.2 DEV` /
+   `V0.2.2 BUILD`.
+2. New Game: switch difficulty Easy/Normal/Hard and confirm the selected value
+   is retained; switch Classic/Endless and check that Classic shows
+   100/200/300 while Endless shows no limit. Start a Normal/Classic 200 game.
+3. Confirm map HUD `回合 1/200`, found a city, and check the city overview
+   shows `HP 100/100  城防 100/100`. End a turn and confirm HP does not exceed
+   the cap.
+4. Train/obtain a garrison, put it on a city center, and attack with an
+   adjacent enemy. Confirm the city reports “CITY IS DEFENDED” until the
+   garrison is destroyed; a later attack drains defense before HP and does not
+   capture until HP reaches 0.
+5. Build Walls; confirm defense max becomes 150. Move a worker onto or next to
+   the city and use Repair City Defense; confirm +25 (or +15 with Walls), capped at max.
+   Let an unhit city end a turn and confirm +10 HP; hit it during a turn and
+   confirm no recovery that turn.
+6. Open Diplomacy, choose Denounce, confirm relation -8, and confirm the
+   action disappears for that rival until the next turn.
+7. Open Science: verify era headings and known/total counts, costs,
+   prerequisites, and unlocks; use `L/R` to jump eras.
+8. Press `L` to toggle the minimap; press `R` to cycle player units with
+   movement. Move the analog stick and confirm the camera pans and the selected
+   tile follows the view center.
+9. Save to slot 1, end a turn, load autosave and slot 1, and confirm
+   difficulty/mode/city combat/denounce state survive. If a V0.1 version-2
+   save exists, load it and confirm Standard→Classic 200, Timed→Endless.
+10. Confirm Classic ends at its limit with the score result; Endless continues
+    past 200. Check Chinese/English toggling and the 12-page manual after the
+    new strings.
+11. Trigger an AI/end-turn unit battle or city assault; confirm the centered
+    turn briefing shows the tile, units, damage, and outcome. Page with `L/R`
+    when there are more than three events, close with `×/○`, and confirm
+    player-initiated attacks still use the bottom toast.
+12. Move the cursor over an enemy unit on an explored but currently
+    non-visible tile, and over an unexplored city tile. Confirm both the
+    bottom status bar and info panel hide the enemy unit/city details; player
+    units should still be listed.
+13. Quit cleanly and report any crash, soft lock, missing glyph, text overlap,
+    audio glitch, or input lag. Record PPSSPP/PSP results in `docs/STATUS.md`.
 
 ## Key files
 
 - `src/main.c` — boot, callbacks, main loop.
 - `src/app.c` — menu/map/city/diplomacy/pause/save/load/results state machine,
-  New Game setup, timed clock, save orchestration.
+  New Game difficulty/mode/turn-limit setup, play timer, save orchestration,
+  and the centered turn-briefing overlay.
+- `src/turn_report.c` / `turn_report.h` — transient AI/end-turn battle and
+  diplomacy event queue used by the briefing.
 - `src/mapview.c` / `mapview.h` — cursor, path movement, action menu, entities,
   HUD, info panel, fog rendering, explored-range minimap.
 - `src/unit.c` / `unit.h` — stats, costs, Dijkstra, vision, road movement.
 - `src/improvement.c` / `improvement.h` — worker improvement validation and
   instant construction.
 - `src/city.c` / `city.h` — yields, growth, queue, production, borders,
-  purchase, square vision.
+  purchase, square vision, city HP/defense, Walls cap, repair, end-turn HP
+  recovery.
 - `src/cityview.c` / `cityview.h` — city screen tabs, grid, citizens, queues.
 - `src/data.c` / `data.h` — central rules: yields, buildings, production,
   tech requirements.
 - `src/tech.c` / `tech.h` — 30-tech tree, eras, prerequisites, unlock text,
   and data-driven tech effects.
-- `src/combat.c` / `combat.h` — M5 damage, defense, counterattack, capture,
-  treaty checks; M8 tech-aware city defense.
+- `src/combat.c` / `combat.h` — damage, defense, counterattack, garrison
+  shielding, city assault (defense before HP), capture only at 0 HP, and
+  tech-aware city defense.
 - `src/ai.c` / `ai.h` — M5 rivals/barbarians/expansion/A*/wars plus M8 derived
   research-driven units and buildings.
 - `src/diplomacy.c` / `diplomacy.h` — M6 actions, gifts, trade, proposals,
   AI-AI diplomacy, relation decay, diplomatic victory.
 - `src/diplomacyview.c` / `diplomacyview.h` — M6 480×272 diplomacy screen.
-- `src/world.c` / `world.h` — civs, start layout, turns, war, capture,
-  economy/upkeep, victory/defeat, vision, relations/treaties/trade/AI
-  treasuries, M7 score, M8 derived AI research, three science goals, and the
-  standard turn-limit score ending.
+- `src/world.c` / `world.h` — civs, difficulty starts, turns, war, capture,
+  city-combat reset, economy/upkeep, victory/defeat, vision,
+  relations/treaties/trade/AI treasuries, score, derived AI research, science
+  goals, Classic/Endless limits, and unit cycling.
 - `src/map.c` / `map.h` — map generation and fog helpers.
 - `src/input.c` / `input.h` — edge/repeat/held queries; all return booleans,
   so read one direction per call. `src/analog.c` / `analog.h` handles stick
   calibration and drift suppression.
-- `src/save.c` / `save.h` — M7 versioned save/load, validation, checksum.
+- `src/save.c` / `save.h` — version-3 save/load, validation, checksum, and
+  explicit v2 migration (Standard→Classic 200, Timed→Endless).
 - `src/gen/strings_gen.*`, `src/gen/font_en.h`, `src/gen/font_zh.h`,
   `src/gen/terrain_gen.h` — generated localized strings and atlases.
 - `src/text.c` / `text.h` — English fixed-cell and Chinese UTF-8 variable-width
@@ -554,40 +667,59 @@ Use the absolute path to `EBOOT.PBP` to smoke-test the packaged build.
   and generated PCM arrays.
 - `assets/src/audio/*.wav` — Python-generated preview SFX/ambient;
   `tools/check_audio.py` verifies they are non-silent.
-- `assets/strings.csv` — 485 English/Chinese UI strings.
+- `assets/strings.csv` — 512 English/Chinese UI strings, including the
+  V0.2.1 `REPORT_*` turn-briefing strings.
 - `tools/gen_art.py`, `tools/gen_font.py`, `tools/gen_audio.py`,
   `tools/pack_atlas.py`, `tools/gen_strings.py`, `tools/check_i18n.py` —
   assets/translation/audio pipeline.
 - `tests/test_map.c`, `tests/test_units.c`, `tests/test_city.c`,
   `tests/test_tech.c`, `tests/test_improvements.c`, `tests/test_combat.c`,
-  `tests/test_ai.c`, `tests/test_diplomacy.c`, `tests/test_analog.c`,
-  `tests/test_save.c`, `tests/test_m7.c`, `tests/test_m8.c`,
-  `tests/test_i18n.c` — host tests. `tests/log_stub.c` makes AI/diplomacy
-  diagnostics linkable on the host.
+  `tests/test_turn_report.c`, `tests/test_ai.c`, `tests/test_diplomacy.c`,
+  `tests/test_analog.c`, `tests/test_save.c`, `tests/test_m7.c`,
+  `tests/test_m8.c`, `tests/test_i18n.c` — host tests. `tests/log_stub.c`
+  makes AI/diplomacy diagnostics linkable on the host.
 - `docs/GAME_DATA.md` — complete unit/building/terrain/tech/economy data sheet.
 - `docs/screenshots/m2_*.png`, `m3_*.png`, `m4_*.png`, `m41_*.png`,
-  `m8_*.png`, `m9_*.png` — validation captures.
+  `m8_*.png`, `m9_*.png`, and `v0.1_main.png` — validation captures. No
+  V0.2.2 screenshots exist yet.
 
 ## Decisions
 
-See `docs/DECISIONS.md` for the full history. Current M9 decisions:
+See `docs/DECISIONS.md` for the full history. Current V0.2.2 decisions:
 
-- Chinese is the default UI language; English remains selectable in Options.
-- Strings are generated in both languages with English fallback; the CSV
-  `zh` column is the translation source.
-- Chinese uses a separate 512×256 RGBA atlas with variable-width glyphs
-  (8px ASCII, 16px CJK); English keeps the original 8×14 atlas so existing
-  English layouts remain stable.
-- Only glyphs used by the string table plus printable ASCII are packed, and
-  Chinese uses a 14px Noto Sans CJK SC face to keep descenders inside 16px
-  cells.
-- Chinese layout uses 16–18px line spacing and adjusted list sizes rather than
-  scaling the whole UI; the science list is 6 rows, production 4 rows, and
-  diplomacy rows 56px.
-- `ICON0.PNG`/`PIC1.PNG` are regenerated for M9 with Chinese taglines and
-  `M9 BUILD`.
-- M8 tech/AI/science/turn-limit decisions remain in force; saves are
-  unchanged.
+- Cities use separate HP and defense pools, both 100 base; Walls raise the
+  defense cap to 150 and reduce worker repair to +15 instead of +25.
+- A garrison on the city center shields the city. Killing it only clears the
+  tile; the city must be assaulted and reduced to 0 HP before capture.
+- Defense absorbs damage before HP and never regenerates. HP +10 is awarded
+  once at end of turn after all player and AI attacks, only if the city was not
+  hit that turn. City production does not heal combat state.
+- Capture resets the city to full HP/defense, reduces population by one,
+  resets the queue, clears agreements, and preserves buildings.
+- AI sieges use the same `Combat_AttackCity` rules and garrison check as the
+  player; there is no separate AI capture shortcut.
+- Classic uses selectable 100/200/300-turn limits and the existing score
+  formula; Endless stores zero limit. Timed mode and wall-clock countdown are
+  removed rather than kept alongside the new modes.
+- Difficulty is applied at world start: Easy adds a player warrior, delays
+  wars, and softens AI economy/barbarians; Hard adds an AI warrior and +20
+  treasury per rival, an extra raider, earlier wars, and faster barbarians.
+  Normal is the V0.1 baseline.
+- Denounce costs 8 relation, is once per rival per turn, and resets in
+  `Diplomacy_ProcessTurn`; it does not break treaties.
+- `L` alone toggles the minimap (the V0.1 L+R chord is gone), `R` selects the
+  next player unit with movement, and analog camera panning keeps the selected
+  tile at the view center.
+- Science remains a 30-tech list but is grouped under four era headings with
+  per-era progress; the right panel shows cost/prerequisites/unlocks, and
+  `L/R` jumps eras.
+- Save v3 is the first city-combat-capable format. v2 Standard loads as
+  Classic 200, v2 Timed as Endless, city combat starts full, and difficulty
+  defaults to Normal. v1 and malformed legacy files remain rejected.
+- `assets/strings.csv` is the single bilingual source; generated fonts and
+  atlases must be rebuilt with `make assets` after string changes.
+
+### Historical M9 decisions
 
 ### Historical M8 decisions
 
@@ -672,18 +804,26 @@ See `docs/DECISIONS.md` for the full history. Current M9 decisions:
 
 ## Tests
 
-- Build: pass — clean, no warnings.
-- Host logic (`make test`): pass — 13 suites: map, units, city, tech,
-  improvements, combat, AI (including 200- and 320-turn simulations),
-  diplomacy, analog, save, M7 scoring/science goals, M8 tech/effects/science/
-  score, and M9 language toggle; plus `tools/check_i18n.py` and
-  `tools/check_audio.py`.
-- PPSSPP ELF/EBOOT: pass — M4.1 worker/improvement, M5 rival/barbarian/combat/
-  defeat, M6 diplomacy flow, M7 standard/timed save/load plus timed expiry, M8
-  Help/30-tech Science/standard turn limit/score result, and M9 Chinese and
-  English UI, Help, map/city/science, diplomacy, save/load, tile info, pause,
-  and score result.
-- PPSSPP EBOOT: M9 EBOOT booted (`CIVITAS PSP M9`) and rendered the Chinese
-  main menu; the current M9 `EBOOT.PBP` has not yet been run on hardware.
+- Build: pass — clean PSP EBOOT, no compiler warnings.
+- Assets: pass — V0.2.2 uses 512 strings, 564 Chinese glyphs, a 512×512 atlas,
+  8 SFX plus ambient; `tools/check_i18n.py` and `tools/check_audio.py` pass.
+  The V0.2 package remains at 498 strings and 561 glyphs.
+- Host logic (`make test`): pass — 14 suites: map, units, city, tech,
+  improvements, combat, turn-report queue, AI (including 200- and 320-turn
+  simulations), diplomacy, analog, save, M7 scoring/science goals, M8
+  tech/effects/science/score, and i18n. V0.2 adds city
+  assault/defense-before-HP, garrison shielding, Walls/repair/HP recovery,
+  difficulty starts, denouncement, save-v3 round-trip, and v2 migration; V0.2.1
+  adds the centered AI/end-turn briefing; V0.2.2 hides fogged enemy units and
+  unexplored cities from the bottom status bar and tile info panel.
+- PPSSPP EBOOT functional smoke: pass for V0.2.2 boot; the prior V0.2.1 EBOOT
+  pass covered the turn briefing. The V0.2.2 fog-HUD visual behavior still
+  needs a hardware retest.
+- Historical PPSSPP validation: M4.1 worker/improvement, M5 rival/barbarian/
+  combat/defeat, M6 diplomacy flow, M7 standard/timed save/load, M8 Help/
+  30-tech Science/standard turn limit/score result, and M9 Chinese/English UI,
+  Help, map/city/science, diplomacy, save/load, tile info, pause, and score
+  result. Those captures and logs belong to the earlier milestone builds.
 - PSP 1000: M0/M1/M1.1/M1.2, M2, M3, M4, M4.1, and M5 pass. M6 feature smoke
-  passed but analog retest is pending; M7, M8, and M9 pending.
+  passed but analog retest is pending; V0.2.1 was tested on hardware and exposed
+  the fog HUD leak. V0.2, M7, M8, M9, and the V0.2.2 retest remain pending.

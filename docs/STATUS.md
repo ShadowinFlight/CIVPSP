@@ -1,15 +1,120 @@
 # Status
 
-Last updated: 2026-10-21
+Last updated: 2026-10-22
 
 ## Current milestone
 
-**V0.1 — First GitHub development release (post-M9.12). Includes the complete
-4X game, Chinese/English UI, 30-tech tree, diplomacy, saves, minimap, audio,
-12-page manual, civilization colors, menu transitions, and release artwork.
-PPSSPP validated; the latest package still needs a final PSP 1000 hardware
-pass. Internal M6–M9 tags remain pending; M5 is tagged `m5` and M4.1 is tagged
-`m4.1`.**
+**V0.2.2 — Fog-of-War HUD Fix (patch release on V0.2.1). Keeps the
+V0.2.1 centered AI/end-turn briefing and city-overview cleanup, plus V0.2's
+city sieges, difficulty, Classic/Endless modes, denouncement, era-grouped
+Science UI, minimap on `L`, next-unit on `R`, analog cursor panning, and save
+v3 with v2 migration. Host tests and PPSSPP boot pass; the fog-HUD fix was
+triggered by PSP 1000 testing and needs a hardware retest.**
+
+- Release package: `release/v0.2.2/` (`EBOOT.PBP`, `civpsp-v0.2.2.zip`,
+  `SHA256SUMS`); tag `v0.2.2`.
+- `src/mapview.c`: the bottom status bar and tile info panel hide rival units
+  on non-visible tiles and cities on unexplored tiles. Player-owned units
+  remain listed.
+- The city overview shows only `HP` and the damage-absorbing `城防` pool; the
+  old `防御` strength row is gone from the UI, while `City_Defense` still
+  affects damage internally.
+- `src/turn_report.*` adds a transient 32-event queue for AI/end-turn combat
+  and diplomacy. `src/app.c` shows it in a centered, three-events-per-page
+  briefing after a turn ends from either the map or city screen, with
+  Left/Right paging and Cross/Circle dismissal. Player-initiated attacks keep
+  the bottom toast.
+- `src/ai.c` records AI unit battles and city assaults; battles involving the
+  player are always recorded, while AI-vs-AI battles are recorded only on
+  player-visible tiles. `src/diplomacy.c` records AI war, peace, and proposals.
+  `World_EndTurn` clears the queue, and new game/load/dismiss also clear it.
+- Current source: 512 string IDs, 564 Chinese glyphs, and 14 host suites
+  (`test_turn_report` added). `make -j4` and `make test` pass, including i18n
+  and audio checks.
+- PPSSPP: the packaged V0.2.2 EBOOT boot log reports
+  `CIVITAS PSP V0.2.2`. The prior V0.2.1 EBOOT smoke loaded a fixture with an
+  adjacent AI warrior at war, ended the turn, and logged
+  `ai combat ... dmg=30 counter=30`, `report: open turn=2 events=1`, and
+  `report: dismissed turn=2` after Cross. WSLg captures remain black, so the
+  fog-HUD fix still needs visual confirmation on hardware.
+- PSP 1000: V0.2.1 hardware testing exposed the fog HUD leak; V0.2.2 hardware
+  retest is pending.
+- `v0.2` remains at `c733769`; `v0.2.1` and their release directories remain
+  unchanged.
+
+## V0.2 (implementation complete, host tests pass, PPSSPP smoke-tested)
+
+### Implemented
+
+- **City combat model** (`src/city.h/.c`): `hp`, `defense`, `defense_max`, and
+  `last_hit_turn` were added to `City`. Base HP/defense are 100; Walls raise
+  the defense cap to 150. Worker repair is +25 normally and +15 with Walls;
+  defense has no passive regeneration. Unhit cities recover +10 HP after all
+  attacks at the end of a turn.
+- **City assault** (`src/combat.c/.h`): `Combat_CanAttackCity` rejects an
+  occupied city with `COMBAT_ERR_DEFENDED`; `Combat_AttackCity` drains defense
+  before HP, captures only at 0 HP, and resets the captured city to full
+  combat state. Killing a garrison no longer advances into or captures the
+  city. Legacy capture entry points perform a full assault instead of an
+  instant capture.
+- **City UI and worker action** (`src/mapview.c`, `src/cityview.c`): the city
+  info panel and city overview show `HP n/100 DEF n/max`; a worker on or next to the city
+  gets Repair City Defense; assault messages show defense/HP damage.
+- **AI sieges** (`src/ai.c`): AI armies move next to target cities and use the
+  same assault rules, defeating the garrison before attacking the city.
+- **Difficulty** (`src/world.h/.c`, `src/ai.c`, `src/app.c`): Easy adds a
+  player warrior and weakens AI economy/diplomacy/barbarians. Hard adds an AI
+  warrior per rival, +20 AI treasury, an extra starting raider, earlier wars,
+  and faster/higher-cap barbarians. Normal preserves the V0.1 baseline.
+- **Modes** (`src/app.c`, `src/save.h/.c`): Timed mode and wall-clock countdown
+  were removed. Classic offers 100/200/300-turn limits; Endless stores no
+  limit. Both map and city-screen turn endings run the same score-limit path.
+- **Controls** (`src/mapview.c`, `src/world.c`): `L` toggles the minimap, `R`
+  cycles only player units with movement, and analog camera panning updates
+  the selection tile to the view center.
+- **Diplomacy** (`src/diplomacy.c/.h`, `src/diplomacyview.c`): Denounce costs
+  8 relation and is limited to once per rival per turn; the action is hidden
+  after use and resets in `Diplomacy_ProcessTurn`. The action popup was
+  compacted to fit the additional row.
+- **Science UI** (`src/cityview.c`): technologies are grouped under era
+  headings with known/total counts, and the detail pane shows era, cost,
+  prerequisites, and unlocks. `L/R` jumps between eras.
+- **Saves** (`src/save.c/.h`): `SAVE_VERSION` is 3. New fields cover city
+  combat, difficulty, and denouncement. v2 files use explicit legacy city/world
+  layouts and migrate Standard→Classic 200, Timed→Endless, full city combat,
+  and Normal difficulty. Legacy pools are bounds-checked before conversion.
+- **UI text/assets** (`assets/strings.csv`, `tools/gen_art.py`, `src/gen/*`):
+  new mode/difficulty/denounce/era/siege strings, stale Timed strings removed,
+  fonts/atlases/audio regenerated, and XMB labels changed to V0.2.
+- **Tests** (`tests/test_combat.c`, `test_save.c`, `test_units.c`,
+  `test_diplomacy.c`): city assault, garrison shielding, Walls cap, repair,
+  end-turn HP recovery, difficulty starts, denouncement limits, v3 round-trip,
+  and v2 migration. `make test` passes all 13 host suites plus i18n/audio
+  checks.
+
+### V0.2 validation evidence
+
+- `make -j4 && make test` passes: 13 host suites, i18n/placeholder/glyph/width
+  checks, and non-silent audio checks.
+- v3 save round-trips preserve city combat fields, difficulty, and denounce
+  state. v2 Standard and Timed fixtures migrate to Classic 200 and Endless
+  respectively, with legacy time fields cleared and city combat initialized.
+- City assault tests verify defense absorption, HP damage, capture only at
+  0 HP, full reset on capture, garrison shielding, Walls cap 150, +25/+15
+  repair amounts, and +10 end-turn HP recovery only after an unhit turn.
+- AI simulation and long-run tests still pass with the new city rules.
+- PPSSPP functional smoke test on the packaged V0.2 EBOOT: started
+  Hard/Classic 300 (17 units, 3 cities, difficulty 2), toggled the minimap
+  with `L`, cycled a unit with `R`, founded a city, opened the city screen and
+  Science tab, and denounced Borea (`relation 0->-8`, action 9). A v3 save
+  with an ungarrisoned enemy city was loaded and the city captured at 0 HP. A
+  v3 save with a garrison was loaded; attacking killed the garrison without
+  capturing, and the city was captured on the next turn's assault. A generated
+  v2 Standard save loaded as Classic 200, turn 42, Normal difficulty.
+- WSLg X11 captures are black and F12 froze PPSSPP during screenshot attempts,
+  so the V0.2 smoke test validates logs and functional paths, not rendered
+  layouts. V0.2 remains a development snapshot; final PSP 1000 validation of
+  the packaged EBOOT is pending.
 
 ## M9 (implementation complete, PPSSPP validated, PSP 1000 pending)
 
