@@ -7,6 +7,7 @@
 #include "gen/strings_gen.h"
 #include "log.h"
 #include "tech.h"
+#include "turn_report.h"
 
 #define AI_MAX_CITIES       4
 #define AI_SITE_RADIUS      10
@@ -27,6 +28,18 @@ static int adjacent(int ax, int ay, int bx, int by) {
     return dx <= 1 && dy <= 1 && (dx != 0 || dy != 0);
 }
 
+/* Battles involving the player are always relevant.  AI-vs-AI battles are
+ * reported only while the player can actually see the tile, so the briefing
+ * does not leak units through fog of war. */
+static int report_battle_relevant(const Map *map, int x, int y,
+                                  int owner_a, int owner_b) {
+    if (owner_a == WORLD_CIV_PLAYER || owner_b == WORLD_CIV_PLAYER) return 1;
+    if (!map || x < 0 || x >= MAP_WIDTH || y < 0 || y >= MAP_HEIGHT) {
+        return 0;
+    }
+    return map->tiles[y][x].visible;
+}
+
 static int city_has_unit(const World *world, const City *city) {
     return Unit_IndexOfAt(&world->units, city->x, city->y) >= 0;
 }
@@ -45,20 +58,28 @@ static int count_owner_type(const World *world, int owner, int type) {
 /* ------------------------------------------------------------------------- */
 
 static void ai_update_diplomacy(World *world) {
-    if (world->turn < 12) return;
+    int easy = world->difficulty == WORLD_DIFFICULTY_EASY;
+    int hard = world->difficulty == WORLD_DIFFICULTY_HARD;
+    int first_turn = hard ? 8 : (easy ? 20 : 12);
+    if (world->turn < first_turn) return;
     if (World_PlayerCityCount(world) == 0) return;
 
     for (int civ = 1; civ <= WORLD_AI_COUNT; civ++) {
         if (!world->civs[civ].active) continue;
 
         if (!World_AreAtWar(world, WORLD_CIV_PLAYER, civ)) {
-            int trigger = 12 + (civ - 1) * 4;
+            int trigger = first_turn + (civ - 1) * (hard ? 2 : 4);
+            int interval = hard ? 10 : 16;
+            int armies = easy ? 4 : (hard ? 2 : 3);
+            int relation_limit = easy ? 10 : (hard ? 35 : 20);
             if (world->turn >= trigger
-                && (world->turn - trigger) % 16 == 0
-                && World_MilitaryCount(world, civ) >= 3
-                && World_Relation(world, civ, WORLD_CIV_PLAYER) < 20
+                && (world->turn - trigger) % interval == 0
+                && World_MilitaryCount(world, civ) >= armies
+                && World_Relation(world, civ, WORLD_CIV_PLAYER)
+                       < relation_limit
                 && World_CanDeclareWar(world, civ, WORLD_CIV_PLAYER)) {
                 World_DeclareWar(world, civ, WORLD_CIV_PLAYER);
+                TurnReport_AddWar(civ, WORLD_CIV_PLAYER);
             }
         }
         /* Peace is now negotiated through Diplomacy_ProcessTurn: the AI
@@ -358,8 +379,16 @@ static int attack_adjacent_unit(World *world, Map *map, int unit_index,
     int target_type = world->units.units[target_index].type;
     int tx = world->units.units[target_index].x;
     int ty = world->units.units[target_index].y;
+    int report = report_battle_relevant(map, tx, ty, attacker_owner,
+                                        target_owner);
     CombatResult result;
     Combat_AttackUnit(world, map, unit_index, target_index, &result);
+    if (report) {
+        TurnReport_AddUnitBattle(attacker_owner, attacker_type, target_owner,
+                                 target_type, tx, ty, result.attacker_damage,
+                                 result.defender_damage, result.attacker_died,
+                                 result.defender_died);
+    }
     Log_Printf("ai combat: owner=%d type=%d at %d,%d -> owner=%d type=%d "
                "at %d,%d dmg=%d counter=%d attacker_hp=%d defender_hp=%d "
                "defender_dead=%d attacker_dead=%d city_captured=%d",
@@ -372,23 +401,66 @@ static int attack_adjacent_unit(World *world, Map *map, int unit_index,
     return 1;
 }
 
-static int ai_capture_city(World *world, Map *map, int unit_index,
-                           int city_index) {
+static int ai_attack_city(World *world, Map *map, int unit_index,
+                          int city_index) {
     if (city_index < 0 || city_index >= world->cities.count) return 0;
     int owner = world->units.units[unit_index].owner;
+    int attacker_type = world->units.units[unit_index].type;
     int city_x = world->cities.cities[city_index].x;
     int city_y = world->cities.cities[city_index].y;
+    int city_owner = world->cities.cities[city_index].owner;
+    int city_name_index = world->cities.cities[city_index].name_index;
+    int report = report_battle_relevant(map, city_x, city_y, owner,
+                                        city_owner);
     CombatResult result;
-    int code = Combat_CaptureCity(world, map, unit_index, city_index,
-                                  &result);
+    int code = Combat_AttackCity(world, map, unit_index, city_index,
+                                 &result);
     if (code == COMBAT_OK) {
-        Log_Printf("ai capture: owner=%d city=%s at %d,%d",
-                   owner, Str(Data_CityName(
-                                 world->cities.cities[city_index].name_index)),
-                   city_x, city_y);
+        if (report) {
+            TurnReport_AddCityBattle(owner, attacker_type, city_owner,
+                                     city_name_index, city_x, city_y,
+                                     result.city_defense_damage,
+                                     result.city_hp_damage,
+                                     result.city_captured);
+        }
+        Log_Printf("ai assault: owner=%d city=%s at %d,%d def=%d hp=%d "
+                   "captured=%d",
+                   owner, Str(Data_CityName(city_name_index)),
+                   city_x, city_y, result.city_defense_damage,
+                   result.city_hp_damage, result.city_captured);
         return 1;
     }
     return 0;
+}
+
+/* Move next to a city instead of onto its center.  Until V0.2 an AI could
+ * walk into an empty city and capture it instantly; the city now has to be
+ * assaulted from an adjacent tile. */
+static void move_toward_city(World *world, Map *map, int unit_index,
+                             const City *city) {
+    if (!world || !map || !city) return;
+    const Unit *unit = &world->units.units[unit_index];
+    if (adjacent(unit->x, unit->y, city->x, city->y)) return;
+
+    int best_x = -1;
+    int best_y = -1;
+    int best_distance = 0x7FFFF;
+    for (int dy = -1; dy <= 1; dy++) {
+        for (int dx = -1; dx <= 1; dx++) {
+            if (dx == 0 && dy == 0) continue;
+            int tx = city->x + dx;
+            int ty = city->y + dy;
+            if (!Unit_PassableTile(map, tx, ty)) continue;
+            if (Unit_IndexOfAt(&world->units, tx, ty) >= 0) continue;
+            int distance = chebyshev(unit->x, unit->y, tx, ty);
+            if (distance < best_distance) {
+                best_distance = distance;
+                best_x = tx;
+                best_y = ty;
+            }
+        }
+    }
+    if (best_x >= 0) move_toward(world, map, unit_index, best_x, best_y);
 }
 
 static void ai_act_soldier(World *world, Map *map, int unit_index) {
@@ -419,32 +491,21 @@ static void ai_act_soldier(World *world, Map *map, int unit_index) {
                     attack_adjacent_unit(world, map, unit_index, garrison);
                     return;
                 }
-            } else if (Combat_CanCaptureCity(world, map, unit_index,
-                                             city_target) == COMBAT_OK) {
-                ai_capture_city(world, map, unit_index, city_target);
+            } else if (Combat_CanAttackCity(world, map, unit_index,
+                                            city_target) == COMBAT_OK) {
+                ai_attack_city(world, map, unit_index, city_target);
                 return;
             }
         }
-        move_toward(world, map, unit_index, city->x, city->y);
+        move_toward_city(world, map, unit_index, city);
         unit = &world->units.units[unit_index];
-        if (unit->x == city->x && unit->y == city->y
-            && city->owner != unit->owner) {
-            int owner = unit->owner;
-            if (World_CaptureCity(world, map, city_target, owner)) {
-                Log_Printf("ai capture: owner=%d city=%s at %d,%d",
-                           owner, Str(Data_CityName(city->name_index)),
-                           city->x, city->y);
-                unit->moves_left = 0;
-            }
-            return;
-        }
         if (adjacent(unit->x, unit->y, city->x, city->y)) {
             int garrison = Unit_IndexOfAt(&world->units, city->x, city->y);
             if (garrison >= 0) {
                 attack_adjacent_unit(world, map, unit_index, garrison);
-            } else if (Combat_CanCaptureCity(world, map, unit_index,
-                                             city_target) == COMBAT_OK) {
-                ai_capture_city(world, map, unit_index, city_target);
+            } else if (Combat_CanAttackCity(world, map, unit_index,
+                                            city_target) == COMBAT_OK) {
+                ai_attack_city(world, map, unit_index, city_target);
             }
         }
         return;
@@ -543,10 +604,13 @@ static int spawn_barbarian(World *world, Map *map) {
 }
 
 static void ai_spawn_barbarians(World *world, Map *map) {
-    if (world->turn < BARBARIAN_SPAWN_TURN_INTERVAL) return;
-    if (world->turn % BARBARIAN_SPAWN_TURN_INTERVAL != 0) return;
-    if (World_CountUnits(world, WORLD_CIV_BARBARIAN)
-        >= BARBARIAN_MAX_UNITS) {
+    int easy = world->difficulty == WORLD_DIFFICULTY_EASY;
+    int hard = world->difficulty == WORLD_DIFFICULTY_HARD;
+    int interval = hard ? 5 : (easy ? 12 : BARBARIAN_SPAWN_TURN_INTERVAL);
+    int max_units = hard ? 6 : (easy ? 2 : BARBARIAN_MAX_UNITS);
+    if (world->turn < interval) return;
+    if (world->turn % interval != 0) return;
+    if (World_CountUnits(world, WORLD_CIV_BARBARIAN) >= max_units) {
         return;
     }
     if (spawn_barbarian(world, map) && world->notice[0] == '\0') {

@@ -4,6 +4,7 @@
 
 #include "city.h"
 #include "data.h"
+#include "log.h"
 
 static int adjacent(int ax, int ay, int bx, int by) {
     int dx = ax > bx ? ax - bx : bx - ax;
@@ -139,17 +140,10 @@ int Combat_AttackUnit(World *world, Map *map, int attacker_index,
     if (result->defender_died) {
         int city_index = City_IndexOfAt(&world->cities, defender_x,
                                         defender_y);
-        if (city_index >= 0
-            && world->cities.cities[city_index].owner != attacker_owner) {
-            if (World_CaptureCity(world, map, city_index, attacker_owner)) {
-                result->city_captured = 1;
-                result->city_index = city_index;
-            }
-        }
-        if (!result->city_captured) {
-            attacker->x = (int8_t)defender_x;
-            attacker->y = (int8_t)defender_y;
-        } else {
+        /* Killing the garrison does not capture the city in V0.2.  The city
+         * keeps its own defense/HP and must be assaulted on a later attack. */
+        if (city_index < 0
+            || world->cities.cities[city_index].owner == attacker_owner) {
             attacker->x = (int8_t)defender_x;
             attacker->y = (int8_t)defender_y;
         }
@@ -157,8 +151,8 @@ int Combat_AttackUnit(World *world, Map *map, int attacker_index,
     return COMBAT_OK;
 }
 
-int Combat_CanCaptureCity(const World *world, const Map *map,
-                          int attacker_index, int city_index) {
+int Combat_CanAttackCity(const World *world, const Map *map,
+                         int attacker_index, int city_index) {
     if (!world || !map) return COMBAT_ERR_INVALID;
     if (attacker_index < 0 || attacker_index >= world->units.count) {
         return COMBAT_ERR_INVALID;
@@ -181,20 +175,21 @@ int Combat_CanCaptureCity(const World *world, const Map *map,
     if (!adjacent(attacker->x, attacker->y, city->x, city->y)) {
         return COMBAT_ERR_NOT_ADJACENT;
     }
+    /* A garrison unit still shields the city; defeat it first. */
     if (Unit_IndexOfAt(&world->units, city->x, city->y) >= 0) {
         return COMBAT_ERR_DEFENDED;
     }
     return COMBAT_OK;
 }
 
-int Combat_CaptureCity(World *world, Map *map, int attacker_index,
-                       int city_index, CombatResult *result) {
+int Combat_AttackCity(World *world, Map *map, int attacker_index,
+                      int city_index, CombatResult *result) {
     CombatResult local;
     if (!result) result = &local;
     memset(result, 0, sizeof(*result));
-    result->city_index = -1;
+    result->city_index = city_index;
 
-    int code = Combat_CanCaptureCity(world, map, attacker_index, city_index);
+    int code = Combat_CanAttackCity(world, map, attacker_index, city_index);
     if (code != COMBAT_OK) return code;
 
     Unit *attacker = &world->units.units[attacker_index];
@@ -208,16 +203,54 @@ int Combat_CaptureCity(World *world, Map *map, int attacker_index,
         World_DeclareWar(world, attacker_owner, defender_owner);
     }
 
-    if (!World_CaptureCity(world, map, city_index, attacker_owner)) {
-        return COMBAT_ERR_INVALID;
+    int attack_strength = g_unit_defs[attacker->type].strength;
+    int damage = Combat_Damage(attack_strength, City_Defense(city));
+    int absorbed = city->defense < damage ? city->defense : damage;
+    int hp_damage = damage - absorbed;
+    if (hp_damage > city->hp) hp_damage = city->hp;
+
+    int old_defense = city->defense;
+    int old_hp = city->hp;
+    city->defense = (uint16_t)(city->defense - absorbed);
+    city->hp = (uint16_t)(city->hp - hp_damage);
+    city->last_hit_turn = (uint16_t)world->turn;
+    attacker->moves_left = 0;
+    world->battles++;
+
+    result->city_defense_damage = absorbed;
+    result->city_hp_damage = hp_damage;
+    result->attacker_damage = damage;
+    result->attacker_hp = attacker->hp ? attacker->hp : UNIT_HP_MAX;
+    result->defender_hp = city->hp;
+
+    if (city->hp == 0) {
+        if (!World_CaptureCity(world, map, city_index, attacker_owner)) {
+            return COMBAT_ERR_INVALID;
+        }
+        attacker = &world->units.units[attacker_index];
+        city = &world->cities.cities[city_index];
+        attacker->x = city->x;
+        attacker->y = city->y;
+        result->city_captured = 1;
     }
 
-    attacker = &world->units.units[attacker_index];
-    attacker->x = city->x;
-    attacker->y = city->y;
-    attacker->moves_left = 0;
-    result->city_captured = 1;
-    result->city_index = city_index;
-    world->battles++;
+    Log_Printf("city combat: defender=%d attacker_owner=%d attacker_unit=%d "
+               "city=%s def=%d->%d hp=%d->%d captured=%d",
+               defender_owner, attacker_owner, attacker_index,
+               Str(Data_CityName(city->name_index)),
+               old_defense, (int)city->defense,
+               old_hp, (int)city->hp, result->city_captured);
     return COMBAT_OK;
+}
+
+/* Legacy wrappers: old call sites now perform a V0.2 city assault instead of
+ * an instant capture. */
+int Combat_CanCaptureCity(const World *world, const Map *map,
+                          int attacker_index, int city_index) {
+    return Combat_CanAttackCity(world, map, attacker_index, city_index);
+}
+
+int Combat_CaptureCity(World *world, Map *map, int attacker_index,
+                       int city_index, CombatResult *result) {
+    return Combat_AttackCity(world, map, attacker_index, city_index, result);
 }

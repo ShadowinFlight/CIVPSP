@@ -51,6 +51,7 @@ typedef enum {
     ACTION_ALLIANCE,
     ACTION_TRADE,
     ACTION_GIFT,
+    ACTION_DENOUNCE,
     ACTION_BACK,
     ACTION_COUNT
 } DiploAction;
@@ -95,6 +96,7 @@ static StrId action_str(int action) {
         case ACTION_ALLIANCE: return S_DIPLO_ALLIANCE_ACTION;
         case ACTION_TRADE:    return S_DIPLO_TRADE_ACTION;
         case ACTION_GIFT:     return S_DIPLO_GIFT_ACTION;
+        case ACTION_DENOUNCE: return S_DIPLO_DENOUNCE_ACTION;
         default:              return S_DIPLO_BACK;
     }
 }
@@ -133,6 +135,9 @@ static int build_actions(const World *world, int civ, int out[ACTION_COUNT]) {
         out[count++] = ACTION_TRADE;
     }
     out[count++] = ACTION_GIFT;
+    if (Diplomacy_CanDenounce(world, civ)) {
+        out[count++] = ACTION_DENOUNCE;
+    }
     out[count++] = ACTION_BACK;
     return count;
 }
@@ -234,6 +239,18 @@ static void execute_action(DiplomacyView *view, Map *map, World *world,
                 set_message(view, Str(S_DIPLO_GIFT_MAX));
             } else {
                 set_message(view, Str(S_DIPLO_PROPOSAL_REJECTED));
+            }
+            break;
+        }
+        case ACTION_DENOUNCE: {
+            int penalty = Diplomacy_Denounce(world, civ);
+            if (penalty > 0) {
+                char text[80];
+                snprintf(text, sizeof(text), Str(S_DIPLO_DENOUNCED),
+                         penalty);
+                set_message(view, text);
+            } else {
+                set_message(view, Str(S_DIPLO_DENOUNCE_USED));
             }
             break;
         }
@@ -531,7 +548,7 @@ static void draw_action_menu(const DiplomacyView *view, const World *world) {
     int civ = civ_for_selected(view);
     int actions[ACTION_COUNT];
     int count = build_actions(world, civ, actions);
-    float h = (float)(34 + count * 22 + 10);
+    float h = (float)(32 + count * 20 + 8);
     float w = 300.0f;
     float x = (SCREEN_WIDTH - w) / 2.0f;
     float y = (SCREEN_HEIGHT - h) / 2.0f;
@@ -540,21 +557,21 @@ static void draw_action_menu(const DiplomacyView *view, const World *world) {
     Render_DrawRect(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, 0xCC050A0Eu);
     Render_DrawRect(x, y, w, h, COLOR_PANEL_OP);
     draw_frame(x, y, w, h, COLOR_GOLD);
-    Text_Drawf(x + 12, y + 9, 1, COLOR_GOLD, "%s  %s",
+    Text_Drawf(x + 12, y + 7, 1, COLOR_GOLD, "%s  %s",
                Str(S_DIPLO_ACTIONS), Str(World_CivNameId(civ)));
 
     for (int i = 0; i < count; i++) {
-        float row_y = y + 29 + i * 22;
+        float row_y = y + 26 + i * 20;
         int selected = (i == view->menu_selection);
         if (selected) {
-            Render_DrawRect(x + 6, row_y - 2, w - 12, 20, COLOR_PANEL_SEL);
-            Render_DrawRect(x + 6, row_y - 2, 3, 20, COLOR_GOLD);
+            Render_DrawRect(x + 6, row_y - 2, w - 12, 18, COLOR_PANEL_SEL);
+            Render_DrawRect(x + 6, row_y - 2, 3, 18, COLOR_GOLD);
         }
         Text_Draw(Str(action_str(actions[i])), x + 16, row_y, 1,
                   selected ? COLOR_TEXT : COLOR_MUTED);
     }
     Text_DrawCentered(Str(S_DIPLO_MENU_FOOTER), SCREEN_WIDTH / 2.0f,
-                      y + h - 16, 1, COLOR_MUTED);
+                      y + h - 14, 1, COLOR_MUTED);
     Render_FlushLayer();
 }
 

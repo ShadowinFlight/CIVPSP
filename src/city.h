@@ -29,6 +29,12 @@
 #define CITY_CENTER_PROD    2
 #define CITY_CENTER_GOLD    1
 #define CITY_CENTER_SCIENCE 1
+#define CITY_HP_MAX          100
+#define CITY_DEFENSE_BASE    100
+#define CITY_WALL_DEFENSE   150
+#define CITY_HP_REGEN         10
+#define CITY_REPAIR_BASE      25
+#define CITY_REPAIR_WALL      15
 
 typedef struct {
     uint8_t owner;
@@ -46,6 +52,12 @@ typedef struct {
     uint32_t worked_mask;
     uint32_t locked_mask;
     uint8_t is_capital;       /* original capital; survives capture */
+    /* V0.2 city combat.  Defense absorbs damage before HP; HP reaches zero
+     * only after the defense pool is exhausted. */
+    uint16_t hp;
+    uint16_t defense;
+    uint16_t defense_max;
+    uint16_t last_hit_turn;
 } City;
 
 typedef struct {
@@ -138,6 +150,15 @@ int City_BorderThreshold(const City *city);
 int City_Maintenance(const City *city);
 int City_Defense(const City *city);
 int City_DefenseWithTech(const City *city, uint32_t researched);
+
+/* V0.2 city combat.  Walls raise the defense-pool cap; the pool does not
+ * regenerate by itself, so a worker must repair it.  HP regenerates while the
+ * city has not been hit during the current turn. */
+int City_DefenseMax(const City *city);
+void City_ResetCombat(City *city);
+void City_UpdateCombat(City *city);
+void City_RecoverHP(City *city, int current_turn);
+int City_RepairDefense(City *city);
 
 /* Citizen assignment.  Auto-assignment keeps locked tiles and fills the rest
  * with the best owned tiles. */

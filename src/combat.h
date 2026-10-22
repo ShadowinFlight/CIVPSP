@@ -25,6 +25,8 @@ typedef struct {
     int defender_died;
     int city_captured;
     int city_index;
+    int city_defense_damage;
+    int city_hp_damage;
 } CombatResult;
 
 /* Deterministic damage from strength difference, clamped to 5..95. */
@@ -39,6 +41,15 @@ int Combat_CanAttack(const World *world, const Map *map, int attacker_index,
 int Combat_AttackUnit(World *world, Map *map, int attacker_index,
                       int defender_index, CombatResult *result);
 
+/* V0.2 city assault: a city must be empty of garrison units before it can be
+ * attacked.  Each attack drains the defense pool, then city HP; the city is
+ * captured when HP reaches zero. */
+int Combat_CanAttackCity(const World *world, const Map *map,
+                         int attacker_index, int city_index);
+int Combat_AttackCity(World *world, Map *map, int attacker_index,
+                      int city_index, CombatResult *result);
+
+/* Legacy names retained for the host tests and older call sites. */
 int Combat_CanCaptureCity(const World *world, const Map *map,
                           int attacker_index, int city_index);
 int Combat_CaptureCity(World *world, Map *map, int attacker_index,

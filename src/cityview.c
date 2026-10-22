@@ -41,8 +41,10 @@
 #define MESSAGE_FRAMES 150
 
 #define CITY_SPRITE    3
+#define SCIENCE_VISIBLE_ROWS 6
 
 static void clamp_view(CityView *view);
+static int science_row_for_tech(int tech, int *out_rows);
 
 #define COLOR_BG       0xFF0E1820u
 #define COLOR_TOP      0xFF14242Cu
@@ -254,11 +256,14 @@ static void draw_selection_bars(const CityView *view, const World *world) {
                         (float)(RIGHT_Y + 22 + view->building_cursor * 17),
                         (float)(RIGHT_W - 8), 16, COLOR_PANEL_SEL);
     } else if (view->tab == CITY_TAB_SCIENCE) {
-        int sel = view->tech_cursor - view->tech_scroll - 1;
-        if (sel >= 0 && sel < 6) {
+        int rows = 0;
+        int sel = science_row_for_tech(view->tech_cursor, &rows)
+                - view->tech_scroll;
+        (void)rows;
+        if (sel >= 0 && sel < SCIENCE_VISIBLE_ROWS) {
             Render_DrawRect((float)(RIGHT_X + 4),
-                            (float)(RIGHT_Y + 70 + sel * 18),
-                            (float)(RIGHT_W - 8), 18, COLOR_PANEL_SEL);
+                            (float)(RIGHT_Y + 52 + sel * 15),
+                            (float)(RIGHT_W - 8), 15, COLOR_PANEL_SEL);
         }
     }
 }
@@ -351,7 +356,7 @@ static void draw_overview(const City *city, const Map *map,
     int border = City_BorderThreshold(city);
     float x = (float)(RIGHT_X + 10);
     float y = (float)(RIGHT_Y + 8);
-    const float step = 16.0f;
+    const float step = 15.0f;
 
     Text_Draw(Str(S_CITY_CITY_INFO), x, y, 1, COLOR_GOLD);
     y += 20.0f;
@@ -374,9 +379,14 @@ static void draw_overview(const City *city, const Map *map,
                Str(S_STAT_INF), city->influence, border, Str(S_CITY_BORDER),
                City_OwnedCount(city), CITY_WORK_TILES);
     y += step;
-    Text_Drawf(x, y, 1, COLOR_TEXT, "%s %d  %s %d",
-               Str(S_STAT_MAINT), yield.maintenance, Str(S_STAT_DEF),
-               yield.defense);
+    Text_Drawf(x, y, 1, COLOR_TEXT, "%s %d",
+               Str(S_STAT_MAINT), yield.maintenance);
+    y += step;
+    Text_Drawf(x, y, 1, COLOR_TEXT, Str(S_CITY_COMBAT_STATUS),
+               city->hp > 0 ? city->hp : CITY_HP_MAX, CITY_HP_MAX,
+               city->defense_max > 0 ? city->defense : City_DefenseMax(city),
+               city->defense_max > 0 ? city->defense_max
+                                     : City_DefenseMax(city));
     y += step;
 
     int net_gold = World_NetGold(world, map);
@@ -631,22 +641,73 @@ static void draw_buildings(const CityView *view, const City *city,
     }
 }
 
+typedef struct {
+    int era;
+    int tech;               /* -1 marks an era heading */
+} ScienceRow;
+
+static int build_science_rows(ScienceRow *rows) {
+    int count = 0;
+    for (int era = 0; era < ERA_COUNT; era++) {
+        rows[count].era = era;
+        rows[count].tech = -1;
+        count++;
+        for (int tech = 1; tech < TECH_COUNT; tech++) {
+            if (Tech_Era(tech) != era) continue;
+            rows[count].era = era;
+            rows[count].tech = tech;
+            count++;
+        }
+    }
+    return count;
+}
+
+static int science_row_for_tech(int tech, int *out_rows) {
+    ScienceRow rows[ERA_COUNT + TECH_COUNT];
+    int count = build_science_rows(rows);
+    if (out_rows) *out_rows = count;
+    for (int i = 0; i < count; i++) {
+        if (rows[i].tech == tech) return i;
+    }
+    return 0;
+}
+
+static int first_tech_in_era(int era) {
+    for (int tech = 1; tech < TECH_COUNT; tech++) {
+        if (Tech_Era(tech) == era) return tech;
+    }
+    return -1;
+}
+
+static void ensure_science_visible(CityView *view) {
+    int count = 0;
+    int row = science_row_for_tech(view->tech_cursor, &count);
+    int max_scroll = count - SCIENCE_VISIBLE_ROWS;
+    if (max_scroll < 0) max_scroll = 0;
+    if (row < view->tech_scroll) view->tech_scroll = row;
+    if (row >= view->tech_scroll + SCIENCE_VISIBLE_ROWS) {
+        view->tech_scroll = row - SCIENCE_VISIBLE_ROWS + 1;
+    }
+    if (view->tech_scroll < 0) view->tech_scroll = 0;
+    if (view->tech_scroll > max_scroll) view->tech_scroll = max_scroll;
+}
+
 static void draw_science(const CityView *view, const World *world) {
     float x = (float)(RIGHT_X + 10);
     float right = (float)(RIGHT_X + RIGHT_W - 10);
     float y = (float)(RIGHT_Y + 6);
 
-    char total[32];
+    char total[64];
     Text_Draw(Str(S_CITY_TAB_SCIENCE), x, y, 1, COLOR_GOLD);
     snprintf(total, sizeof(total), "%s %d", Str(S_MAP_SCI),
              (int)world->science);
     Text_DrawRight(total, right, y, 1, COLOR_SCI);
-    y += 16.0f;
+    y += 15.0f;
 
     snprintf(total, sizeof(total), Str(S_TECH_PROJECTS),
              World_ScienceGoalCount(world), WORLD_SCIENCE_GOAL_COUNT);
     Text_Draw(total, x, y, 1, COLOR_GOLD);
-    y += 16.0f;
+    y += 15.0f;
 
     int target = World_ResearchType(world);
     if (target > TECH_NONE) {
@@ -657,12 +718,35 @@ static void draw_science(const CityView *view, const World *world) {
         Text_Draw(Str(S_TECH_NO_RESEARCH), x, y, 1, COLOR_MUTED);
     }
 
-    for (int row = 0; row < 6; row++) {
-        int tech = view->tech_scroll + 1 + row;
-        if (tech >= TECH_COUNT) break;
-        const TechDef *def = &g_tech_defs[tech];
-        float row_y = (float)(RIGHT_Y + 70 + row * 18);
+    Render_DrawRect(x, (float)(RIGHT_Y + 51), (float)(RIGHT_W - 20), 1,
+                    COLOR_BORDER);
 
+    ScienceRow rows[ERA_COUNT + TECH_COUNT];
+    int row_count = build_science_rows(rows);
+    float list_top = (float)(RIGHT_Y + 54);
+    for (int row = 0; row < SCIENCE_VISIBLE_ROWS; row++) {
+        int index = view->tech_scroll + row;
+        if (index >= row_count) break;
+        float row_y = list_top + row * 15.0f;
+        if (rows[index].tech < 0) {
+            int era = rows[index].era;
+            int known = 0;
+            int era_total = 0;
+            for (int tech = 1; tech < TECH_COUNT; tech++) {
+                if (Tech_Era(tech) != era) continue;
+                era_total++;
+                if (Tech_IsKnown(world->researched, tech)) known++;
+            }
+            Render_DrawRect((float)(RIGHT_X + 4), row_y - 2.0f,
+                            (float)(RIGHT_W - 8), 15.0f, 0x332B4749u);
+            Text_Draw(Str(Tech_EraName(era)), x, row_y, 1, COLOR_GOLD);
+            snprintf(total, sizeof(total), "%d/%d", known, era_total);
+            Text_DrawRight(total, right, row_y, 1, COLOR_MUTED);
+            continue;
+        }
+
+        int tech = rows[index].tech;
+        const TechDef *def = &g_tech_defs[tech];
         int known = Tech_IsKnown(world->researched, tech);
         int is_curr = world->research_type == tech;
         int avail = Tech_CanSelect(world->researched, tech);
@@ -673,8 +757,8 @@ static void draw_science(const CityView *view, const World *world) {
             snprintf(status, sizeof(status), "%s", Str(S_TECH_RESEARCHED));
         } else if (is_curr) {
             color = COLOR_GOLD;
-            snprintf(status, sizeof(status), "%d/%d", (int)world->research_progress,
-                     Tech_Cost(tech));
+            snprintf(status, sizeof(status), "%d/%d",
+                     (int)world->research_progress, Tech_Cost(tech));
         } else if (avail) {
             color = COLOR_TEXT;
             snprintf(status, sizeof(status), "%d", Tech_Cost(tech));
@@ -682,12 +766,35 @@ static void draw_science(const CityView *view, const World *world) {
             color = COLOR_MUTED;
             snprintf(status, sizeof(status), "%s", Str(S_TECH_LOCKED));
         }
-        Text_Draw(Str(def->name_id), x, row_y, 1, color);
+        Text_Draw(Str(def->name_id), x + 8.0f, row_y, 1, color);
         Text_DrawRight(status, right, row_y, 1, color);
     }
 
+    Render_DrawRect(x, (float)(RIGHT_Y + 148), (float)(RIGHT_W - 20), 1,
+                    COLOR_BORDER);
+
     if (view->tech_cursor > TECH_NONE && view->tech_cursor < TECH_COUNT) {
         const TechDef *selected = &g_tech_defs[view->tech_cursor];
+        Text_Drawf(x, (float)(RIGHT_Y + 152), 1, COLOR_TEXT, "%s  %s %d",
+                   Str(Tech_EraName(selected->era)), Str(S_TECH_COST),
+                   selected->cost);
+
+        char prereq[96];
+        if (selected->prereq1 < 0 && selected->prereq2 < 0) {
+            snprintf(prereq, sizeof(prereq), "%s",
+                     Str(S_TECH_PREREQ_NONE));
+        } else if (selected->prereq1 >= 0 && selected->prereq2 >= 0) {
+            snprintf(prereq, sizeof(prereq), "%s, %s",
+                     Str(Tech_Name(selected->prereq1)),
+                     Str(Tech_Name(selected->prereq2)));
+        } else {
+            int prereq_tech = selected->prereq1 >= 0
+                                  ? selected->prereq1 : selected->prereq2;
+            snprintf(prereq, sizeof(prereq), "%s",
+                     Str(Tech_Name(prereq_tech)));
+        }
+        Text_Drawf(x, (float)(RIGHT_Y + 166), 1, COLOR_MUTED,
+                   "%s: %s", Str(S_TECH_PREREQ), prereq);
         Text_Draw(Str(selected->unlock_id), x, (float)(RIGHT_Y + 180), 1,
                   COLOR_MUTED);
     }
@@ -696,6 +803,18 @@ static void draw_science(const CityView *view, const World *world) {
 static void update_science(CityView *view, World *world) {
     if (Input_Repeated(PSP_CTRL_UP)) view->tech_cursor--;
     if (Input_Repeated(PSP_CTRL_DOWN)) view->tech_cursor++;
+    if (Input_Repeated(PSP_CTRL_LEFT) || Input_Repeated(PSP_CTRL_RIGHT)) {
+        int era = Tech_Era(view->tech_cursor);
+        int step = Input_Repeated(PSP_CTRL_LEFT) ? ERA_COUNT - 1 : 1;
+        for (int i = 0; i < ERA_COUNT; i++) {
+            era = (era + step) % ERA_COUNT;
+            int tech = first_tech_in_era(era);
+            if (tech >= 0) {
+                view->tech_cursor = tech;
+                break;
+            }
+        }
+    }
     clamp_view(view);
     if (Input_Pressed(PSP_CTRL_CROSS)) {
         int tech = view->tech_cursor;
@@ -799,14 +918,7 @@ static void clamp_view(CityView *view) {
     if (view->tech_cursor < 1) view->tech_cursor = 1;
     int tmax = TECH_COUNT - 1;
     if (view->tech_cursor > tmax) view->tech_cursor = tmax;
-    if (view->tech_scroll < 0) view->tech_scroll = 0;
-    if (view->tech_scroll > tmax - 6) view->tech_scroll = tmax - 6;
-    if (view->tech_cursor < view->tech_scroll + 1) {
-        view->tech_scroll = view->tech_cursor - 1;
-    }
-    if (view->tech_cursor > view->tech_scroll + 6) {
-        view->tech_scroll = view->tech_cursor - 6;
-    }
+    ensure_science_visible(view);
 }
 
 static void update_production(CityView *view, City *city, World *world) {

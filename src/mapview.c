@@ -70,6 +70,27 @@ static StrId fog_str(const MapTile *tile) {
     return S_MAP_FOG_EXPLORED;
 }
 
+/* Cursor info must not reveal live rival positions through the HUD or the
+ * tile panel.  Player units stay listed even if a vision update has not run
+ * yet. */
+static int visible_unit_index_at(const Map *map, const World *world,
+                                 int x, int y) {
+    int index = Unit_IndexOfAt(&world->units, x, y);
+    if (index < 0) return -1;
+    if (!map->tiles[y][x].visible
+        && world->units.units[index].owner != WORLD_CIV_PLAYER) {
+        return -1;
+    }
+    return index;
+}
+
+/* Cities are static and remain known once their tile has been explored. */
+static const City *known_city_at(const Map *map, const World *world,
+                                 int x, int y) {
+    if (!map->tiles[y][x].explored) return NULL;
+    return City_AtConst(&world->cities, x, y);
+}
+
 static float clampf(float value, float lo, float hi) {
     if (value < lo) return lo;
     if (value > hi) return hi;
@@ -233,28 +254,62 @@ static int garrison_city_for(const World *world, const Map *map,
     return -1;
 }
 
+/* A worker can repair a damaged friendly city while standing on or next to
+ * it.  City defense does not regenerate automatically. */
+static int repair_city_for(const World *world, const Map *map,
+                           const Unit *unit) {
+    if (!world || !map || !unit || unit->type != UNIT_WORKER
+        || unit->moves_left == 0) {
+        return -1;
+    }
+    for (int i = 0; i < world->cities.count; i++) {
+        const City *city = &world->cities.cities[i];
+        if (city->owner != WORLD_CIV_PLAYER) continue;
+        int dx = unit->x > city->x ? unit->x - city->x : city->x - unit->x;
+        int dy = unit->y > city->y ? unit->y - city->y : city->y - unit->y;
+        if (dx > 1 || dy > 1) continue;
+        if (city->defense < city->defense_max) return i;
+    }
+    return -1;
+}
+
+enum {
+    MENU_FOUND = 0,
+    MENU_REPAIR,
+    MENU_BUILD,
+    MENU_GARRISON,
+    MENU_WAIT,
+    MENU_CANCEL
+};
+
 static int menu_actions(const World *world, const Map *map, const Unit *unit,
-                        StrId out[3]) {
+                        int actions[4], StrId labels[4]) {
     if (unit->type == UNIT_SETTLER) {
-        out[0] = S_ACTION_FOUND;
-        out[1] = S_ACTION_WAIT;
-        out[2] = S_ACTION_CANCEL;
+        actions[0] = MENU_FOUND; labels[0] = S_ACTION_FOUND;
+        actions[1] = MENU_WAIT;  labels[1] = S_ACTION_WAIT;
+        actions[2] = MENU_CANCEL; labels[2] = S_ACTION_CANCEL;
         return 3;
     }
     if (unit->type == UNIT_WORKER) {
-        out[0] = S_ACTION_BUILD;
-        out[1] = S_ACTION_WAIT;
-        out[2] = S_ACTION_CANCEL;
-        return 3;
+        int n = 0;
+        if (repair_city_for(world, map, unit) >= 0) {
+            actions[n] = MENU_REPAIR; labels[n++] = S_ACTION_REPAIR;
+        }
+        actions[n] = MENU_BUILD; labels[n++] = S_ACTION_BUILD;
+        actions[n] = MENU_WAIT; labels[n++] = S_ACTION_WAIT;
+        actions[n] = MENU_CANCEL; labels[n++] = S_ACTION_CANCEL;
+        return n;
     }
     if (garrison_city_for(world, map, unit) >= 0) {
-        out[0] = S_ACTION_GARRISON;
-        out[1] = S_ACTION_WAIT;
-        out[2] = S_ACTION_CANCEL;
+        actions[0] = MENU_GARRISON; labels[0] = S_ACTION_GARRISON;
+        actions[1] = MENU_WAIT; labels[1] = S_ACTION_WAIT;
+        actions[2] = MENU_CANCEL; labels[2] = S_ACTION_CANCEL;
         return 3;
     }
-    out[0] = S_ACTION_WAIT;
-    out[1] = S_ACTION_CANCEL;
+    actions[0] = MENU_WAIT;
+    labels[0] = S_ACTION_WAIT;
+    actions[1] = MENU_CANCEL;
+    labels[1] = S_ACTION_CANCEL;
     return 2;
 }
 
@@ -372,7 +427,7 @@ static void attack_unit_at(MapView *view, Map *map, World *world,
     set_message(view, msg);
 }
 
-static void capture_city_at(MapView *view, Map *map, World *world,
+static void assault_city_at(MapView *view, Map *map, World *world,
                             int city_index) {
     if (!selected_unit(world, view)) return;
     const City *before = &world->cities.cities[city_index];
@@ -382,18 +437,32 @@ static void capture_city_at(MapView *view, Map *map, World *world,
              Str(Data_CityName(before->name_index)));
 
     CombatResult result;
-    int code = Combat_CaptureCity(world, map, view->selected, city_index,
-                                  &result);
+    int code = Combat_AttackCity(world, map, view->selected, city_index,
+                                 &result);
     if (code != COMBAT_OK) {
         set_message(view, Str(combat_error_str(code)));
         return;
     }
 
     World_UpdateVision(world, map);
+    Audio_PlaySfx(AUDIO_SFX_COMBAT);
     char msg[96];
-    snprintf(msg, sizeof(msg), "%s %s", Str(S_MSG_CITY_CAPTURED), city_name);
-    Log_Printf("combat: player captured %s from owner=%d", city_name,
-               old_owner);
+    if (result.city_captured) {
+        snprintf(msg, sizeof(msg), "%s %s",
+                 Str(S_MSG_CITY_CAPTURED), city_name);
+    } else {
+        snprintf(msg, sizeof(msg), "%s  %s",
+                 city_name, Str(S_MSG_ATTACK_HIT));
+        /* Compact result: defense absorbed, HP damage, remaining values. */
+        char detail[64];
+        snprintf(detail, sizeof(detail), Str(S_MSG_CITY_ASSAULT_DETAIL),
+                 result.city_defense_damage, result.city_hp_damage);
+        strncat(msg, detail, sizeof(msg) - strlen(msg) - 1);
+    }
+    Log_Printf("combat: player assaulted %s owner=%d def_dmg=%d hp_dmg=%d "
+               "captured=%d", city_name, old_owner,
+               result.city_defense_damage, result.city_hp_damage,
+               result.city_captured);
     advance_after_action(view, world, map);
     set_message(view, msg);
 }
@@ -405,8 +474,9 @@ static void update_menu(MapView *view, World *world, Map *map) {
         return;
     }
 
-    StrId items[3];
-    int count = menu_actions(world, map, unit, items);
+    int actions[4];
+    StrId labels[4];
+    int count = menu_actions(world, map, unit, actions, labels);
     if (view->menu_selection >= count) view->menu_selection = 0;
     if (Input_Repeated(PSP_CTRL_UP)) {
         view->menu_selection = (view->menu_selection + count - 1) % count;
@@ -420,16 +490,13 @@ static void update_menu(MapView *view, World *world, Map *map) {
     }
     if (!Input_Pressed(PSP_CTRL_CROSS)) return;
 
-    int action = view->menu_selection;
-    int garrison_city = garrison_city_for(world, map, unit);
-    int garrison = (garrison_city >= 0 && action == 0);
-    int found = (unit->type == UNIT_SETTLER && action == 0);
-    int build = (unit->type == UNIT_WORKER && action == 0);
-    int wait = garrison_city >= 0 ? action == 1
-             : ((unit->type == UNIT_SETTLER || unit->type == UNIT_WORKER)
-                ? action == 1 : action == 0);
-
-    if (garrison) {
+    int action = actions[view->menu_selection];
+    if (action == MENU_GARRISON) {
+        int garrison_city = garrison_city_for(world, map, unit);
+        if (garrison_city < 0) {
+            view->menu_open = 0;
+            return;
+        }
         const City *city = &world->cities.cities[garrison_city];
         int ux = unit->x;
         int uy = unit->y;
@@ -456,7 +523,29 @@ static void update_menu(MapView *view, World *world, Map *map) {
         return;
     }
 
-    if (build) {
+    if (action == MENU_REPAIR) {
+        int city_index = repair_city_for(world, map, unit);
+        if (city_index >= 0) {
+            City *city = &world->cities.cities[city_index];
+            int repaired = City_RepairDefense(city);
+            unit->moves_left = 0;
+            view->menu_open = 0;
+            Audio_PlaySfx(AUDIO_SFX_BUILD);
+            char msg[96];
+            snprintf(msg, sizeof(msg), Str(S_MSG_CITY_REPAIRED), repaired);
+            Log_Printf("city: worker repaired %s defense +%d now=%d/%d",
+                       Str(Data_CityName(city->name_index)), repaired,
+                       city->defense, city->defense_max);
+            advance_after_action(view, world, map);
+            set_message(view, msg);
+        } else {
+            view->menu_open = 0;
+            set_message(view, Str(S_MSG_CITY_REPAIR_NONE));
+        }
+        return;
+    }
+
+    if (action == MENU_BUILD) {
         view->menu_open = 0;
         view->build_open = 1;
         view->build_selection = 0;
@@ -464,7 +553,7 @@ static void update_menu(MapView *view, World *world, Map *map) {
         return;
     }
 
-    if (found) {
+    if (action == MENU_FOUND) {
         int ux = unit->x;
         int uy = unit->y;
         int result = World_FoundCity(world, map, view->selected);
@@ -489,7 +578,7 @@ static void update_menu(MapView *view, World *world, Map *map) {
         return;
     }
 
-    if (wait) {
+    if (action == MENU_WAIT) {
         int ux = unit->x;
         int uy = unit->y;
         unit->moves_left = 0;
@@ -590,9 +679,7 @@ int MapView_Update(MapView *view, Map *map, World *world) {
         return 0;
     }
 
-    int both_shoulders = Input_Pressed(PSP_CTRL_LTRIGGER)
-                      && Input_Pressed(PSP_CTRL_RTRIGGER);
-    if (both_shoulders) {
+    if (Input_Pressed(PSP_CTRL_LTRIGGER)) {
         view->minimap_open = !view->minimap_open;
         Audio_PlaySfx(AUDIO_SFX_SELECT);
         Log_Printf("map: minimap %s", view->minimap_open ? "open" : "closed");
@@ -659,10 +746,10 @@ int MapView_Update(MapView *view, Map *map, World *world) {
             }
 
             if (city_index >= 0) {
-                int code = Combat_CanCaptureCity(world, map, view->selected,
-                                                 city_index);
+                int code = Combat_CanAttackCity(world, map, view->selected,
+                                                city_index);
                 if (code == COMBAT_OK) {
-                    capture_city_at(view, map, world, city_index);
+                    assault_city_at(view, map, world, city_index);
                 } else {
                     set_message(view, Str(combat_error_str(code)));
                 }
@@ -760,22 +847,15 @@ int MapView_Update(MapView *view, Map *map, World *world) {
         view->info_open = !view->info_open;
     }
 
-    if (!both_shoulders && Input_Pressed(PSP_CTRL_LTRIGGER)) {
-        int next = World_CycleUnit(world, view->selected, -1);
+    if (Input_Pressed(PSP_CTRL_RTRIGGER)) {
+        int next = World_NextUnitWithMoves(world, view->selected);
         if (next >= 0) {
             select_unit(view, world, map, next, 1);
-            Log_Printf("unit: cycle prev -> %d at %d,%d", next,
+            Log_Printf("unit: next with moves -> %d at %d,%d", next,
                        world->units.units[next].x,
                        world->units.units[next].y);
-        }
-    }
-    if (!both_shoulders && Input_Pressed(PSP_CTRL_RTRIGGER)) {
-        int next = World_CycleUnit(world, view->selected, 1);
-        if (next >= 0) {
-            select_unit(view, world, map, next, 1);
-            Log_Printf("unit: cycle next -> %d at %d,%d", next,
-                       world->units.units[next].x,
-                       world->units.units[next].y);
+        } else {
+            set_message(view, Str(S_MSG_NO_MOVES));
         }
     }
 
@@ -829,6 +909,23 @@ int MapView_Update(MapView *view, Map *map, World *world) {
         clamp_camera(view);
         view->target_x = view->cam_x;
         view->target_y = view->cam_y;
+
+        /* Keep the selection square on the tile under the camera center while
+         * the analog stick pans.  This makes the cursor follow the view
+         * instead of leaving it behind at the screen edge. */
+        int center_x = (int)((view->cam_x + SCREEN_WIDTH * 0.5f)
+                             / (float)MAP_TILE_PX);
+        int center_y = (int)((view->cam_y + MAP_VIEW_H * 0.5f)
+                             / (float)MAP_TILE_PX);
+        if (center_x < 0) center_x = 0;
+        if (center_x >= MAP_WIDTH) center_x = MAP_WIDTH - 1;
+        if (center_y < 0) center_y = 0;
+        if (center_y >= MAP_HEIGHT) center_y = MAP_HEIGHT - 1;
+        if (center_x != view->cursor_x || center_y != view->cursor_y) {
+            view->cursor_x = center_x;
+            view->cursor_y = center_y;
+            update_reachable(view, world, map);
+        }
     }
 
     view->cam_x = approach(view->cam_x, view->target_x);
@@ -1077,10 +1174,10 @@ static void draw_hud(const MapView *view, const Map *map, const World *world) {
     Render_DrawRect(0, SCREEN_HEIGHT - 24, SCREEN_WIDTH, 24, COLOR_BOTTOM);
     Render_DrawRect(0, SCREEN_HEIGHT - 24, SCREEN_WIDTH, 1, COLOR_GOLD);
 
-    int unit_index = Unit_IndexOfAt(&world->units,
-                                    view->cursor_x, view->cursor_y);
-    const City *city = City_AtConst(&world->cities,
-                                    view->cursor_x, view->cursor_y);
+    int unit_index = visible_unit_index_at(map, world,
+                                           view->cursor_x, view->cursor_y);
+    const City *city = known_city_at(map, world,
+                                     view->cursor_x, view->cursor_y);
     const Unit *selected = selected_unit_const(world, view);
 
     if (unit_index >= 0) {
@@ -1111,36 +1208,32 @@ static void draw_hud(const MapView *view, const Map *map, const World *world) {
         Text_Draw(Str(S_MAP_CONTROLS), 8, SCREEN_HEIGHT - 19, 1, COLOR_MUTED);
     }
 
-    if (view->time_active) {
-        unsigned int seconds = view->time_remaining_seconds;
-        snprintf(buf, sizeof(buf), "%s %u:%02u", Str(S_MAP_TIME),
-                 seconds / 60u, seconds % 60u);
-        Text_DrawRight(buf, SCREEN_WIDTH - 8, SCREEN_HEIGHT - 19, 1, COLOR_GOLD);
-    } else if (view->turn_limit > 0) {
+    if (view->turn_limit > 0) {
         snprintf(buf, sizeof(buf), "%s %d/%d", Str(S_MAP_TURN),
                  world->turn, view->turn_limit);
         Text_DrawRight(buf, SCREEN_WIDTH - 8, SCREEN_HEIGHT - 19, 1,
                        COLOR_GOLD);
     } else {
-        snprintf(buf, sizeof(buf), "%s %d", Str(S_MAP_FPS), view->fps);
-        Text_DrawRight(buf, SCREEN_WIDTH - 8, SCREEN_HEIGHT - 19, 1,
-                       COLOR_MUTED);
+        Text_DrawRight(Str(S_NEW_GAME_ENDLESS), SCREEN_WIDTH - 8,
+                       SCREEN_HEIGHT - 19, 1, COLOR_GOLD);
     }
 }
 
 static void draw_info_panel(const MapView *view, const Map *map,
                             const World *world) {
     const MapTile *tile = &map->tiles[view->cursor_y][view->cursor_x];
-    const Unit *unit = Unit_AtConst(&world->units,
-                                    view->cursor_x, view->cursor_y);
-    const City *city = City_AtConst(&world->cities,
-                                    view->cursor_x, view->cursor_y);
+    int unit_index = visible_unit_index_at(map, world,
+                                           view->cursor_x, view->cursor_y);
+    const Unit *unit = unit_index >= 0 ? &world->units.units[unit_index]
+                                       : NULL;
+    const City *city = known_city_at(map, world,
+                                     view->cursor_x, view->cursor_y);
     const float x = 12.0f;
     const float y = 36.0f;
     const float w = 208.0f;
     float h = 121.0f;
     if (unit) h += 54.0f;
-    if (city) h += 36.0f;
+    if (city) h += 54.0f;
 
     Render_DrawRect(x, y, w, h, COLOR_PANEL);
     Render_DrawRect(x, y, w, 1, COLOR_GOLD);
@@ -1175,11 +1268,18 @@ static void draw_info_panel(const MapView *view, const Map *map,
         line += 54.0f;
     }
     if (city) {
+        int hp = city->hp > 0 ? city->hp : CITY_HP_MAX;
+        int defense_max = city->defense_max > 0
+                              ? city->defense_max : City_DefenseMax(city);
+        int defense = city->defense_max > 0 ? city->defense : defense_max;
         Text_Drawf(x + 10, line, 1, World_CivColor(city->owner), "%s %s",
                    Str(S_MAP_CITY), Str(Data_CityName(city->name_index)));
         Text_Drawf(x + 10, line + 18, 1, COLOR_MUTED, "%s %s  %s %d",
                    Str(S_MAP_OWNER), Str(World_CivNameId(city->owner)),
                    Str(S_MAP_POP), city->population);
+        Text_Drawf(x + 10, line + 36, 1, COLOR_TEXT,
+                   Str(S_CITY_COMBAT_STATUS), hp, CITY_HP_MAX,
+                   defense, defense_max);
     }
 }
 
@@ -1254,7 +1354,7 @@ static void draw_minimap_button(void) {
     Render_DrawRect(MINIMAP_BUTTON_X + MINIMAP_BUTTON_W - 1, MINIMAP_BUTTON_Y,
                     1, MINIMAP_BUTTON_H, COLOR_BORDER);
     Text_Drawf(MINIMAP_BUTTON_X + 8, MINIMAP_BUTTON_Y + 2, 1, COLOR_GOLD,
-               "%s L+R", Str(S_MINIMAP_TITLE));
+               "%s L", Str(S_MINIMAP_TITLE));
 }
 
 static void draw_minimap(const MapView *view, const Map *map,
@@ -1359,8 +1459,9 @@ static void draw_action_menu(const MapView *view, const Map *map,
     const Unit *unit = selected_unit_const(world, view);
     if (!view->menu_open || !unit) return;
 
-    StrId items[3];
-    int count = menu_actions(world, map, unit, items);
+    int actions[4];
+    StrId items[4];
+    int count = menu_actions(world, map, unit, actions, items);
     const float w = 156.0f;
     const float item_h = 18.0f;
     const float title_h = 20.0f;

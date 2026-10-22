@@ -8,6 +8,7 @@
 
 #include "audio.h"
 #include "cityview.h"
+#include "data.h"
 #include "diplomacyview.h"
 #include "game.h"
 #include "gen/strings_gen.h"
@@ -19,6 +20,7 @@
 #include "rng.h"
 #include "save.h"
 #include "text.h"
+#include "turn_report.h"
 #include "world.h"
 
 typedef enum {
@@ -51,15 +53,20 @@ typedef struct {
     CityView city_view;
     DiplomacyView diplomacy_view;
 
-    /* M7 game mode and wall-clock timer. */
+    /* Centered briefing for events from the AI/end-turn phase.  The existing
+     * map/city message remains the short bottom toast. */
+    int report_open;
+    int report_page;
+
+    /* V0.2 game mode, classic turn limit, and play timer. */
     SaveMode mode;
-    uint32_t limit_seconds;
-    uint32_t remaining_ms;
+    uint32_t turn_limit;
     uint32_t play_ms;
     uint32_t clock_remainder_us;
     uint32_t last_tick_us;
     SaveMode new_mode;
-    int new_time_index;
+    int new_turn_index;
+    int new_difficulty;
     int load_from_pause;
 
     int help_page;
@@ -88,9 +95,9 @@ static App app;
 #define MENU_SLIDE_PX      14.0f
 #define MENU_GLOW_FRAMES   8
 
-#define TIME_CHOICE_COUNT 3
-static const uint32_t time_choices[TIME_CHOICE_COUNT] = {
-    30u * 60u, 60u * 60u, 90u * 60u
+#define TURN_CHOICE_COUNT 3
+static const uint32_t turn_choices[TURN_CHOICE_COUNT] = {
+    100u, 200u, 300u
 };
 
 static void show_toast(const char *text) {
@@ -98,15 +105,139 @@ static void show_toast(const char *text) {
     app.toast_timer = 180;
 }
 
-static uint32_t remaining_seconds(void) {
-    return (app.remaining_ms + 999u) / 1000u;
+#define REPORT_EVENTS_PER_PAGE 3
+
+static int report_page_count(void) {
+    int count = TurnReport_Count();
+    return (count + REPORT_EVENTS_PER_PAGE - 1) / REPORT_EVENTS_PER_PAGE;
 }
 
-static void sync_map_clock(void) {
-    app.map_view.time_active = app.mode == SAVE_MODE_TIMED;
-    app.map_view.time_remaining_seconds = remaining_seconds();
-    app.map_view.turn_limit = app.mode == SAVE_MODE_STANDARD
-                                  ? WORLD_STANDARD_TURN_LIMIT : 0;
+static void append_report_detail(char *detail, size_t size, StrId id) {
+    size_t used = strlen(detail);
+    if (used + 1 >= size) return;
+    snprintf(detail + used, size - used, "  %s", Str(id));
+}
+
+static void format_turn_report(const TurnReportEvent *event, char *line,
+                               size_t line_size, char *detail,
+                               size_t detail_size) {
+    line[0] = '\0';
+    detail[0] = '\0';
+
+    switch (event->type) {
+        case TURN_REPORT_UNIT_BATTLE:
+            snprintf(line, line_size, Str(S_REPORT_BATTLE_LINE),
+                     (int)event->x, (int)event->y,
+                     Str(World_CivNameId(event->attacker_owner)),
+                     Str(Data_UnitName(event->attacker_type)),
+                     Str(World_CivNameId(event->defender_owner)),
+                     Str(Data_UnitName(event->defender_type)));
+            snprintf(detail, detail_size, Str(S_REPORT_UNIT_DETAIL),
+                     (int)event->attack_damage,
+                     (int)event->counter_damage);
+            if (event->defender_died) {
+                append_report_detail(detail, detail_size,
+                                     S_MSG_DEFENDER_KILLED);
+            } else if (event->attacker_died) {
+                append_report_detail(detail, detail_size,
+                                     S_REPORT_ATTACKER_LOST);
+            }
+            break;
+        case TURN_REPORT_CITY_BATTLE:
+            snprintf(line, line_size, Str(S_REPORT_BATTLE_LINE),
+                     (int)event->x, (int)event->y,
+                     Str(World_CivNameId(event->attacker_owner)),
+                     Str(Data_UnitName(event->attacker_type)),
+                     Str(S_MAP_CITY),
+                     Str(Data_CityName(event->city_name_index)));
+            snprintf(detail, detail_size, Str(S_REPORT_CITY_DETAIL),
+                     (int)event->city_defense_damage,
+                     (int)event->city_hp_damage);
+            if (event->city_captured) {
+                append_report_detail(detail, detail_size,
+                                     S_MSG_CITY_CAPTURED);
+            }
+            break;
+        case TURN_REPORT_WAR:
+            snprintf(line, line_size, Str(S_REPORT_DIPLO_LINE),
+                     Str(World_CivNameId(event->attacker_owner)),
+                     Str(World_CivNameId(event->defender_owner)));
+            snprintf(detail, detail_size, "%s", Str(S_REPORT_WAR));
+            break;
+        case TURN_REPORT_PEACE:
+            snprintf(line, line_size, Str(S_REPORT_DIPLO_LINE),
+                     Str(World_CivNameId(event->attacker_owner)),
+                     Str(World_CivNameId(event->defender_owner)));
+            snprintf(detail, detail_size, "%s", Str(S_REPORT_PEACE));
+            break;
+        case TURN_REPORT_PROPOSAL:
+            snprintf(line, line_size, Str(S_REPORT_DIPLO_LINE),
+                     Str(World_CivNameId(event->attacker_owner)),
+                     Str(World_CivNameId(event->defender_owner)));
+            if (event->proposal_type == WORLD_PROPOSAL_NAP) {
+                snprintf(detail, detail_size, "%s",
+                         Str(S_REPORT_PROPOSAL_NAP));
+            } else if (event->proposal_type == WORLD_PROPOSAL_ALLIANCE) {
+                snprintf(detail, detail_size, "%s",
+                         Str(S_REPORT_PROPOSAL_ALLIANCE));
+            } else {
+                snprintf(detail, detail_size, "%s",
+                         Str(S_REPORT_PROPOSAL_PEACE));
+            }
+            break;
+        default:
+            break;
+    }
+}
+
+static void update_turn_report(void) {
+    int pages = report_page_count();
+    if (pages <= 0) {
+        app.report_open = 0;
+        app.report_page = 0;
+        TurnReport_Clear();
+        return;
+    }
+    if (app.report_page < 0) app.report_page = 0;
+    if (app.report_page >= pages) app.report_page = pages - 1;
+
+    if (Input_Pressed(PSP_CTRL_LEFT) && app.report_page > 0) {
+        app.report_page--;
+    }
+    if (Input_Pressed(PSP_CTRL_RIGHT) && app.report_page + 1 < pages) {
+        app.report_page++;
+    }
+    if (Input_Pressed(PSP_CTRL_CROSS | PSP_CTRL_CIRCLE)) {
+        app.report_open = 0;
+        app.report_page = 0;
+        TurnReport_Clear();
+        Log_Printf("report: dismissed turn=%d", app.world.turn);
+    }
+}
+
+static void maybe_open_turn_report(void) {
+    if (app.report_open || TurnReport_Count() <= 0) return;
+    if (app.state != STATE_MAP && app.state != STATE_CITY
+        && app.state != STATE_GAME_OVER) {
+        return;
+    }
+    app.report_open = 1;
+    app.report_page = 0;
+    Log_Printf("report: open turn=%d events=%d", app.world.turn,
+               TurnReport_Count());
+}
+
+static void sync_map_limit(void) {
+    app.map_view.turn_limit = app.mode == SAVE_MODE_CLASSIC
+                                  ? (int)app.turn_limit : 0;
+}
+
+static StrId difficulty_str(int difficulty) {
+    switch (difficulty) {
+        case WORLD_DIFFICULTY_EASY: return S_DIFFICULTY_EASY;
+        case WORLD_DIFFICULTY_HARD: return S_DIFFICULTY_HARD;
+        default: return S_DIFFICULTY_NORMAL;
+    }
 }
 
 static SaveView capture_view(void) {
@@ -128,20 +259,12 @@ static void enter_game_over(void) {
                World_BestRivalScore(&app.world), app.play_ms / 1000u);
 }
 
-static void finish_timed_game(void) {
+static void finish_classic_game(void) {
     if (app.world.game_over != WORLD_GAME_NONE) return;
     World_FinishScoreGame(&app.world);
-    Log_Printf("time up: score=%d rival_best=%d result=%d",
+    Log_Printf("turn limit: turn=%d limit=%u score=%d rival_best=%d result=%d",
+               app.world.turn, (unsigned)app.turn_limit,
                World_PlayerScore(&app.world),
-               World_BestRivalScore(&app.world), app.world.game_over);
-    enter_game_over();
-}
-
-static void finish_standard_game(void) {
-    if (app.world.game_over != WORLD_GAME_NONE) return;
-    World_FinishScoreGame(&app.world);
-    Log_Printf("turn limit: turn=%d score=%d rival_best=%d result=%d",
-               app.world.turn, World_PlayerScore(&app.world),
                World_BestRivalScore(&app.world), app.world.game_over);
     enter_game_over();
 }
@@ -163,44 +286,37 @@ static void update_game_clock(void) {
     if (elapsed_ms == 0) return;
 
     app.play_ms += elapsed_ms;
-    if (app.mode == SAVE_MODE_TIMED) {
-        if (elapsed_ms >= app.remaining_ms) {
-            app.remaining_ms = 0;
-        } else {
-            app.remaining_ms -= elapsed_ms;
-        }
-        sync_map_clock();
-        if (app.remaining_ms == 0) {
-            finish_timed_game();
-        }
-    }
 }
 
-static void start_new_game(SaveMode mode, uint32_t limit_seconds) {
+static void start_new_game(SaveMode mode, uint32_t turn_limit,
+                           int difficulty) {
     uint32_t seed = Rng_Next();
     Map_Generate(&app.map, seed);
-    World_Begin(&app.world, &app.map);
+    World_BeginWithDifficulty(&app.world, &app.map, difficulty);
     Input_CalibrateStick();
     MapView_Init(&app.map_view, &app.map, &app.world);
+    TurnReport_Clear();
+    app.report_open = 0;
+    app.report_page = 0;
 
     app.mode = mode;
-    app.limit_seconds = mode == SAVE_MODE_TIMED ? limit_seconds : 0;
-    app.remaining_ms = mode == SAVE_MODE_TIMED ? limit_seconds * 1000u : 0;
+    app.turn_limit = mode == SAVE_MODE_CLASSIC ? turn_limit : 0;
     app.play_ms = 0;
     app.clock_remainder_us = 0;
     app.last_tick_us = (uint32_t)sceKernelGetSystemTimeLow();
     app.state = STATE_MAP;
     app.selection = 0;
-    sync_map_clock();
+    sync_map_limit();
 
     Log_Printf("new game: seed=%08X start=%d,%d units=%d cities=%d "
-               "treasury=%d science=%d mode=%s limit=%u analog=%d,%d "
-               "center=%d,%d dz=%d",
+               "treasury=%d science=%d mode=%s limit=%u difficulty=%d "
+               "analog=%d,%d center=%d,%d dz=%d",
                (unsigned)seed, app.map.start_x, app.map.start_y,
                app.world.units.count, app.world.cities.count,
                (int)app.world.treasury, (int)app.world.science,
-               mode == SAVE_MODE_TIMED ? "timed" : "standard",
-               app.limit_seconds, g_input.analog_x, g_input.analog_y,
+               mode == SAVE_MODE_ENDLESS ? "endless" : "classic",
+               (unsigned)app.turn_limit, difficulty,
+               g_input.analog_x, g_input.analog_y,
                g_input.analog_center_x, g_input.analog_center_y,
                g_input.analog_deadzone);
     for (int i = 0; i < app.world.units.count; i++) {
@@ -214,11 +330,12 @@ static SaveResult write_game_slot(int slot) {
     SaveView view = capture_view();
     SaveResult result = Save_WriteSlot(
         slot, &app.map, &app.world, &view, (uint32_t)app.mode,
-        remaining_seconds(), app.play_ms / 1000u, app.limit_seconds,
+        app.turn_limit, app.play_ms / 1000u,
         (uint32_t)World_PlayerScore(&app.world), Rng_GetState());
     if (result == SAVE_OK) {
-        Log_Printf("save: write slot=%d turn=%d mode=%u score=%d",
+        Log_Printf("save: write slot=%d turn=%d mode=%u limit=%u score=%d",
                    slot, app.world.turn, (unsigned)app.mode,
+                   (unsigned)app.turn_limit,
                    World_PlayerScore(&app.world));
     } else {
         Log_Printf("save: write failed slot=%d result=%d", slot, result);
@@ -246,10 +363,16 @@ static int load_game_slot(int slot) {
     }
 
     Rng_SetState(header.rng_state);
-    app.mode = header.mode == SAVE_MODE_TIMED ? SAVE_MODE_TIMED
-                                              : SAVE_MODE_STANDARD;
-    app.limit_seconds = header.limit_seconds;
-    app.remaining_ms = header.remaining_seconds * 1000u;
+    TurnReport_Clear();
+    app.report_open = 0;
+    app.report_page = 0;
+    app.mode = header.mode == SAVE_MODE_ENDLESS ? SAVE_MODE_ENDLESS
+                                                : SAVE_MODE_CLASSIC;
+    app.turn_limit = app.mode == SAVE_MODE_CLASSIC
+                         ? header.turn_limit : 0;
+    if (app.mode == SAVE_MODE_CLASSIC && app.turn_limit == 0) {
+        app.turn_limit = WORLD_STANDARD_TURN_LIMIT;
+    }
     app.play_ms = header.play_seconds * 1000u;
     app.clock_remainder_us = 0;
     app.last_tick_us = (uint32_t)sceKernelGetSystemTimeLow();
@@ -259,11 +382,13 @@ static int load_game_slot(int slot) {
     app.map_view.turn_ended = 0;
     app.load_from_pause = 0;
     app.selection = 0;
-    sync_map_clock();
+    sync_map_limit();
 
-    Log_Printf("save: load slot=%d turn=%d mode=%u score=%u time=%u",
+    Log_Printf("save: load slot=%d turn=%d mode=%u limit=%u score=%u "
+               "difficulty=%d",
                slot, header.turn, (unsigned)header.mode,
-               header.player_score, header.remaining_seconds);
+               (unsigned)app.turn_limit, header.player_score,
+               app.world.difficulty);
     if (app.world.game_over != WORLD_GAME_NONE) {
         enter_game_over();
     } else {
@@ -324,10 +449,10 @@ static void update_map(void) {
     }
     if (app.map_view.turn_ended) {
         app.map_view.turn_ended = 0;
-        if (app.mode == SAVE_MODE_STANDARD
-            && app.world.turn > WORLD_STANDARD_TURN_LIMIT
+        if (app.mode == SAVE_MODE_CLASSIC
+            && app.world.turn > (int)app.turn_limit
             && app.world.game_over == WORLD_GAME_NONE) {
-            finish_standard_game();
+            finish_classic_game();
         }
         (void)write_game_slot(SAVE_SLOT_AUTO);
         if (app.state == STATE_GAME_OVER) return;
@@ -368,11 +493,11 @@ static void update_city(void) {
     }
     if (app.world.turn != turn_before) {
         /* Ending a turn from the city screen must use the same autosave and
-         * standard-mode turn-limit path as ending it from the map. */
-        if (app.mode == SAVE_MODE_STANDARD
-            && app.world.turn > WORLD_STANDARD_TURN_LIMIT
+         * classic-mode turn-limit path as ending it from the map. */
+        if (app.mode == SAVE_MODE_CLASSIC
+            && app.world.turn > (int)app.turn_limit
             && app.world.game_over == WORLD_GAME_NONE) {
-            finish_standard_game();
+            finish_classic_game();
         }
         (void)write_game_slot(SAVE_SLOT_AUTO);
         if (app.state == STATE_GAME_OVER) return;
@@ -411,8 +536,9 @@ static void update_main_menu(void) {
         switch (app.selection) {
             case 0:
                 app.selection = 0;
-                app.new_mode = SAVE_MODE_STANDARD;
-                app.new_time_index = 1;
+                app.new_mode = SAVE_MODE_CLASSIC;
+                app.new_turn_index = 1;
+                app.new_difficulty = WORLD_DIFFICULTY_NORMAL;
                 app.state = STATE_NEW_GAME;
                 Log_Printf("menu: new game setup");
                 break;
@@ -486,37 +612,42 @@ static void update_options(void) {
 
 static void update_new_game(void) {
     if (Input_Repeated(PSP_CTRL_UP)) {
-        app.selection = (app.selection + 3) % 4;
+        app.selection = (app.selection + 4) % 5;
     }
     if (Input_Repeated(PSP_CTRL_DOWN)) {
-        app.selection = (app.selection + 1) % 4;
+        app.selection = (app.selection + 1) % 5;
     }
     if (Input_Repeated(PSP_CTRL_LEFT) || Input_Repeated(PSP_CTRL_RIGHT)) {
         int dir = Input_Repeated(PSP_CTRL_RIGHT) ? 1 : -1;
         if (app.selection == 0) {
-            app.new_mode = app.new_mode == SAVE_MODE_STANDARD
-                               ? SAVE_MODE_TIMED : SAVE_MODE_STANDARD;
-        } else if (app.selection == 1 && app.new_mode == SAVE_MODE_TIMED) {
-            app.new_time_index = (app.new_time_index + dir
-                                  + TIME_CHOICE_COUNT) % TIME_CHOICE_COUNT;
+            app.new_mode = app.new_mode == SAVE_MODE_CLASSIC
+                               ? SAVE_MODE_ENDLESS : SAVE_MODE_CLASSIC;
+        } else if (app.selection == 1 && app.new_mode == SAVE_MODE_CLASSIC) {
+            app.new_turn_index = (app.new_turn_index + dir
+                                  + TURN_CHOICE_COUNT) % TURN_CHOICE_COUNT;
+        } else if (app.selection == 2) {
+            app.new_difficulty = (app.new_difficulty + dir + 3) % 3;
         }
     }
     if (Input_Pressed(PSP_CTRL_CROSS)) {
         switch (app.selection) {
             case 0:
-                app.new_mode = app.new_mode == SAVE_MODE_STANDARD
-                                   ? SAVE_MODE_TIMED : SAVE_MODE_STANDARD;
+                app.new_mode = app.new_mode == SAVE_MODE_CLASSIC
+                                   ? SAVE_MODE_ENDLESS : SAVE_MODE_CLASSIC;
                 break;
             case 1:
-                if (app.new_mode == SAVE_MODE_TIMED) {
-                    app.new_time_index = (app.new_time_index + 1)
-                                         % TIME_CHOICE_COUNT;
+                if (app.new_mode == SAVE_MODE_CLASSIC) {
+                    app.new_turn_index = (app.new_turn_index + 1)
+                                         % TURN_CHOICE_COUNT;
                 }
                 break;
-            case 2: {
-                uint32_t limit = app.new_mode == SAVE_MODE_TIMED
-                                     ? time_choices[app.new_time_index] : 0;
-                start_new_game(app.new_mode, limit);
+            case 2:
+                app.new_difficulty = (app.new_difficulty + 1) % 3;
+                break;
+            case 3: {
+                uint32_t limit = app.new_mode == SAVE_MODE_CLASSIC
+                                     ? turn_choices[app.new_turn_index] : 0;
+                start_new_game(app.new_mode, limit, app.new_difficulty);
                 break;
             }
             default:
@@ -624,11 +755,13 @@ static void update_load_menu(void) {
 
 void App_Init(void) {
     memset(&app, 0, sizeof(app));
+    TurnReport_Clear();
     app.state = STATE_MAIN_MENU;
     app.selection = 0;
-    app.new_mode = SAVE_MODE_STANDARD;
-    app.new_time_index = 1;
-    app.mode = SAVE_MODE_STANDARD;
+    app.new_mode = SAVE_MODE_CLASSIC;
+    app.new_turn_index = 1;
+    app.new_difficulty = WORLD_DIFFICULTY_NORMAL;
+    app.mode = SAVE_MODE_CLASSIC;
     app.state_anim = 0;
     app.selection_anim = 0;
     app.last_selection = 0;
@@ -662,6 +795,11 @@ void App_Update(void) {
     if (app.toast_timer > 0) app.toast_timer--;
     update_game_clock();
     update_ui_audio();
+
+    if (app.report_open) {
+        update_turn_report();
+        return;
+    }
 
     switch (app.state) {
         case STATE_MAIN_MENU:
@@ -712,6 +850,7 @@ void App_Update(void) {
     } else if (app.selection_anim > 0) {
         app.selection_anim--;
     }
+    maybe_open_turn_report();
 }
 
 static void draw_background(void) {
@@ -800,6 +939,57 @@ static void draw_toast(void) {
     Text_DrawCentered(app.toast, SCREEN_WIDTH / 2.0f, y + 6, 1, COLOR_TEXT);
 }
 
+static void draw_turn_report(void) {
+    int count = TurnReport_Count();
+    if (!app.report_open || count <= 0) return;
+
+    int pages = report_page_count();
+    int page = app.report_page;
+    if (page < 0) page = 0;
+    if (page >= pages) page = pages - 1;
+    int first = page * REPORT_EVENTS_PER_PAGE;
+    int last = first + REPORT_EVENTS_PER_PAGE;
+    if (last > count) last = count;
+
+    const float x = 26.0f;
+    const float y = 26.0f;
+    const float w = SCREEN_WIDTH - 52.0f;
+    const float h = 216.0f;
+
+    Render_FlushLayer();
+    Render_DrawRect(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, 0xAA000000u);
+    Render_DrawRect(x, y, w, h, 0xFA0A1116u);
+    Render_DrawRect(x, y, w, 1, COLOR_GOLD);
+    Render_DrawRect(x, y + h - 1, w, 1, COLOR_GOLD);
+    Render_DrawRect(x, y, 1, h, COLOR_BORDER);
+    Render_DrawRect(x + w - 1, y, 1, h, COLOR_BORDER);
+
+    Text_DrawCentered(Str(S_REPORT_TITLE), SCREEN_WIDTH / 2.0f, y + 7, 2,
+                      COLOR_GOLD);
+
+    char header[96];
+    snprintf(header, sizeof(header), Str(S_REPORT_TURN), app.world.turn);
+    Text_Draw(header, x + 14, y + 42, 1, COLOR_TEXT);
+    snprintf(header, sizeof(header), Str(S_REPORT_PAGE), page + 1, pages);
+    Text_DrawRight(header, x + w - 14, y + 42, 1, COLOR_MUTED);
+    Render_DrawRect(x + 14, y + 59, w - 28, 1, COLOR_BORDER);
+
+    float row_y = y + 66;
+    for (int i = first; i < last; i++) {
+        const TurnReportEvent *event = TurnReport_At(i);
+        if (!event) break;
+        char line[192];
+        char detail[192];
+        format_turn_report(event, line, sizeof(line), detail, sizeof(detail));
+        Text_Draw(line, x + 14, row_y, 1, COLOR_TEXT);
+        Text_Draw(detail, x + 14, row_y + 17, 1, COLOR_MUTED);
+        row_y += 36;
+    }
+
+    Text_DrawCentered(Str(S_REPORT_FOOTER), SCREEN_WIDTH / 2.0f,
+                      y + h - 21, 1, COLOR_MUTED);
+}
+
 static void draw_slot_row(int index, int slot, float y) {
     const float w = SCREEN_WIDTH - 128.0f;
     const float h = 28.0f;
@@ -816,15 +1006,15 @@ static void draw_slot_row(int index, int slot, float y) {
 
     if (app.slot_status[slot] == SAVE_OK) {
         const SaveHeader *header = &app.slot_header[slot];
-        if (header->mode == SAVE_MODE_TIMED) {
-            unsigned int sec = header->remaining_seconds;
-            snprintf(details, sizeof(details), "%s %u  %s %u  %02u:%02u",
+        if (header->mode == SAVE_MODE_ENDLESS) {
+            snprintf(details, sizeof(details), "%s %u  %s  %s %u",
                      Str(S_MAP_TURN), (unsigned)header->turn,
-                     Str(S_GAME_RESULT_SCORE), (unsigned)header->player_score,
-                     sec / 60u, sec % 60u);
+                     Str(S_NEW_GAME_ENDLESS),
+                     Str(S_GAME_RESULT_SCORE), (unsigned)header->player_score);
         } else {
-            snprintf(details, sizeof(details), "%s %u  %s %u",
+            snprintf(details, sizeof(details), "%s %u/%u  %s %u",
                      Str(S_MAP_TURN), (unsigned)header->turn,
+                     (unsigned)header->turn_limit,
                      Str(S_GAME_RESULT_SCORE), (unsigned)header->player_score);
         }
     } else if (app.slot_status[slot] == SAVE_ERR_OPEN) {
@@ -976,19 +1166,22 @@ static void render_new_game(void) {
     Render_DrawRect(60, 66, SCREEN_WIDTH - 120, 1, 0x663E5A5C);
 
     draw_value_row(0, Str(S_NEW_GAME_MODE),
-                   Str(app.new_mode == SAVE_MODE_TIMED
-                           ? S_NEW_GAME_TIMED : S_NEW_GAME_STANDARD), 78);
+                   Str(app.new_mode == SAVE_MODE_ENDLESS
+                           ? S_NEW_GAME_ENDLESS : S_NEW_GAME_STANDARD), 78);
 
-    if (app.new_mode == SAVE_MODE_TIMED) {
-        unsigned int minutes = time_choices[app.new_time_index] / 60u;
-        snprintf(value, sizeof(value), Str(S_NEW_GAME_MINUTES), (int)minutes);
+    if (app.new_mode == SAVE_MODE_CLASSIC) {
+        snprintf(value, sizeof(value), Str(S_NEW_GAME_TURNS),
+                 (int)turn_choices[app.new_turn_index]);
     } else {
-        snprintf(value, sizeof(value), "%s", Str(S_NEW_GAME_TURNS_200));
+        snprintf(value, sizeof(value), "%s", Str(S_NEW_GAME_UNLIMITED));
     }
-    draw_value_row(1, Str(S_NEW_GAME_LIMIT), value, 110);
+    draw_value_row(1, Str(S_NEW_GAME_LIMIT), value, 106);
 
-    draw_menu_item(2, Str(S_NEW_GAME_START), 146);
-    draw_menu_item(3, Str(S_NEW_GAME_BACK), 174);
+    draw_value_row(2, Str(S_NEW_GAME_DIFFICULTY),
+                   Str(difficulty_str(app.new_difficulty)), 134);
+
+    draw_menu_item(3, Str(S_NEW_GAME_START), 172);
+    draw_menu_item(4, Str(S_NEW_GAME_BACK), 202);
     Text_DrawCentered(Str(S_MENU_FOOTER), SCREEN_WIDTH / 2.0f,
                       SCREEN_HEIGHT - 28, 1, COLOR_MUTED);
     draw_toast();
@@ -1068,16 +1261,15 @@ static void render_game_over(void) {
                 break;
         }
     } else if (app.world.victory_type == WORLD_VICTORY_SCORE) {
-        title = app.mode == SAVE_MODE_TIMED ? S_GAME_TIME_UP
-                                            : S_GAME_TURN_LIMIT;
+        title = S_GAME_TURN_LIMIT;
         body = S_GAME_SCORE_DEFEAT_BODY;
     }
 
     int turns = app.world.turn;
-    if (app.mode == SAVE_MODE_STANDARD
+    if (app.mode == SAVE_MODE_CLASSIC
         && app.world.victory_type == WORLD_VICTORY_SCORE
-        && turns > WORLD_STANDARD_TURN_LIMIT) {
-        turns = WORLD_STANDARD_TURN_LIMIT;
+        && turns > (int)app.turn_limit) {
+        turns = (int)app.turn_limit;
     }
 
     Text_DrawCentered(Str(title), SCREEN_WIDTH / 2.0f, 44, 3, title_color);
@@ -1155,4 +1347,7 @@ void App_Render(void) {
             break;
     }
     draw_screen_transition();
+    if (app.report_open) {
+        draw_turn_report();
+    }
 }

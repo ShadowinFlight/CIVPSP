@@ -9,6 +9,7 @@
 #define DIPLO_OPEN_BORDERS_MIN 10
 #define DIPLO_NAP_TURNS       10
 #define DIPLO_OPEN_BORDERS_TURNS 10
+#define DIPLO_DENOUNCE_PENALTY 8
 
 typedef enum {
     DIPLO_BAND_HOSTILE = 0,
@@ -35,6 +36,11 @@ int Diplomacy_RequestNAP(World *world, int civ);
 int Diplomacy_RequestOpenBorders(World *world, int civ);
 int Diplomacy_RequestTrade(World *world, int civ);
 int Diplomacy_RequestAlliance(World *world, int civ);
+
+/* V0.2: publicly denounce a rival.  One denouncement per rival per turn;
+ * returns the relation penalty, or a DIPLO_ERR_* code. */
+int Diplomacy_CanDenounce(const World *world, int civ);
+int Diplomacy_Denounce(World *world, int civ);
 
 /* Gift a fixed amount of gold for a diminishing relation gain.  Returns the
  * relation gain (>= 0) or a negative DiplomacyResult. */

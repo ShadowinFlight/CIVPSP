@@ -384,6 +384,60 @@ int City_DefenseWithTech(const City *city, uint32_t researched) {
     return total;
 }
 
+int City_DefenseMax(const City *city) {
+    if (!city) return CITY_DEFENSE_BASE;
+    return City_HasBuilding(city, BUILDING_WALLS)
+               ? CITY_WALL_DEFENSE : CITY_DEFENSE_BASE;
+}
+
+void City_ResetCombat(City *city) {
+    if (!city) return;
+    city->hp = CITY_HP_MAX;
+    city->defense_max = (uint16_t)City_DefenseMax(city);
+    city->defense = city->defense_max;
+    city->last_hit_turn = 0;
+}
+
+void City_UpdateCombat(City *city) {
+    if (!city) return;
+    /* Fixtures and converted legacy saves may predate the combat fields. */
+    if (city->hp == 0 && city->defense == 0 && city->defense_max == 0) {
+        City_ResetCombat(city);
+    }
+    int max = City_DefenseMax(city);
+    if (city->defense_max != (uint16_t)max) {
+        city->defense_max = (uint16_t)max;
+        if (city->defense > city->defense_max) {
+            city->defense = city->defense_max;
+        }
+    }
+    if (city->hp > CITY_HP_MAX) city->hp = CITY_HP_MAX;
+}
+
+/* Called once at the end of a turn, after all player and AI attacks.  A city
+ * recovers only when it was not hit during that turn. */
+void City_RecoverHP(City *city, int current_turn) {
+    if (!city || current_turn <= 0) return;
+    if (city->last_hit_turn >= (uint16_t)current_turn) return;
+    if (city->hp >= CITY_HP_MAX) return;
+    int hp = (int)city->hp + CITY_HP_REGEN;
+    city->hp = (uint16_t)(hp > CITY_HP_MAX ? CITY_HP_MAX : hp);
+}
+
+int City_RepairDefense(City *city) {
+    if (!city) return 0;
+    int max = City_DefenseMax(city);
+    city->defense_max = (uint16_t)max;
+    if (city->defense >= city->defense_max) return 0;
+    int amount = City_HasBuilding(city, BUILDING_WALLS)
+                     ? CITY_REPAIR_WALL : CITY_REPAIR_BASE;
+    int defense = (int)city->defense + amount;
+    if (defense > city->defense_max) defense = city->defense_max;
+    int repaired = defense - city->defense;
+    city->defense = (uint16_t)defense;
+    return repaired;
+}
+
 static const ProductionDef *queue_front(const City *city) {
     if (!city || city->queue_count == 0) return NULL;
     return Data_ProductionDef((ProductionType)city->queue[0]);
@@ -741,6 +795,9 @@ void City_ProcessTurnWithTech(City *city, Map *map, UnitPool *units, int broke,
         }
     }
 
+    /* A completed wall changes the defense-pool cap immediately; the cap
+     * update must not turn into free healing, so pass turn 0 here. */
+    City_UpdateCombat(city);
     if (City_GrowBorder(city, map)) events->border_grew = 1;
 }
 
@@ -792,6 +849,7 @@ static void init_city_state(City *city, const Map *map) {
     city->worked_mask = 0;
     city->locked_mask = 0;
     memset(city->queue, 0, sizeof(city->queue));
+    City_ResetCombat(city);
 
     for (int dy = -CITY_INITIAL_RADIUS; dy <= CITY_INITIAL_RADIUS; dy++) {
         for (int dx = -CITY_INITIAL_RADIUS; dx <= CITY_INITIAL_RADIUS; dx++) {

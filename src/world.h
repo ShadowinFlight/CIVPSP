@@ -29,6 +29,12 @@
 #define WORLD_SCIENCE_GOAL_COUNT     3
 
 typedef enum {
+    WORLD_DIFFICULTY_EASY = 0,
+    WORLD_DIFFICULTY_NORMAL,
+    WORLD_DIFFICULTY_HARD
+} WorldDifficulty;
+
+typedef enum {
     WORLD_PROPOSAL_NONE = 0,
     WORLD_PROPOSAL_PEACE,
     WORLD_PROPOSAL_NAP,
@@ -93,6 +99,9 @@ typedef struct {
     uint8_t proposal_cooldown;
     uint8_t alliance_victory_turns;
     uint8_t victory_type;       /* WorldVictoryType */
+    /* V0.2 new-game options and per-turn diplomacy limits. */
+    uint8_t difficulty;         /* WorldDifficulty */
+    uint8_t denounce_used[WORLD_CIV_COUNT];
 } World;
 
 typedef enum {
@@ -105,6 +114,7 @@ typedef enum {
 
 void World_Init(World *world);
 void World_Begin(World *world, Map *map);
+void World_BeginWithDifficulty(World *world, Map *map, int difficulty);
 void World_UpdateVision(World *world, Map *map);
 void World_EndTurn(World *world, Map *map);
 
@@ -179,6 +189,8 @@ int World_NetGold(const World *world, const Map *map);
 int World_FoundCity(World *world, Map *map, int unit_index);
 
 int World_FirstUnitWithMoves(const World *world);
+/* R-shoulder cycling: only player units that still have movement points. */
+int World_NextUnitWithMoves(const World *world, int current);
 int World_CycleUnit(const World *world, int current, int direction);
 
 #endif

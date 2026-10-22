@@ -30,12 +30,10 @@ typedef struct {
     int fps;
     int fps_frames;
     uint32_t fps_last_us;
-    /* M7: the map view asks the app for an autosave after each end turn and
-     * displays the remaining time in timed mode. */
+    /* The map view asks the app for an autosave after each end turn and shows
+     * the classic-mode turn limit. */
     int turn_ended;
-    int time_active;
-    uint32_t time_remaining_seconds;
-    int turn_limit;            /* 0 = unlimited, otherwise standard limit */
+    int turn_limit;            /* 0 = endless, otherwise classic limit */
 } MapView;
 
 void MapView_Init(MapView *view, Map *map, const World *world);

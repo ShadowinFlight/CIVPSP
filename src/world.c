@@ -8,6 +8,7 @@
 #include "gen/strings_gen.h"
 #include "log.h"
 #include "tech.h"
+#include "turn_report.h"
 
 #define START_OWNER WORLD_CIV_PLAYER
 
@@ -194,6 +195,9 @@ static void spawn_rivals(World *world, Map *map) {
         if (guard >= 0) world->units.units[guard].moves_left = 0;
         spawn_near(world, map, UNIT_WARRIOR, owner, sx, sy);
         spawn_near(world, map, UNIT_SETTLER, owner, sx, sy);
+        if (world->difficulty == WORLD_DIFFICULTY_HARD) {
+            spawn_near(world, map, UNIT_WARRIOR, owner, sx, sy);
+        }
 
         chosen_x[owner - 1] = sx;
         chosen_y[owner - 1] = sy;
@@ -219,10 +223,16 @@ void World_Init(World *world) {
     world->game_over = WORLD_GAME_NONE;
     world->proposal_civ = WORLD_CIV_NONE;
     world->victory_type = WORLD_VICTORY_NONE;
+    world->difficulty = WORLD_DIFFICULTY_NORMAL;
 }
 
-void World_Begin(World *world, Map *map) {
+void World_BeginWithDifficulty(World *world, Map *map, int difficulty) {
     World_Init(world);
+    if (difficulty < WORLD_DIFFICULTY_EASY
+        || difficulty > WORLD_DIFFICULTY_HARD) {
+        difficulty = WORLD_DIFFICULTY_NORMAL;
+    }
+    world->difficulty = (uint8_t)difficulty;
     UnitPool_Init(&world->units);
     CityPool_Init(&world->cities);
     Map_ResetFog(map);
@@ -230,18 +240,28 @@ void World_Begin(World *world, Map *map) {
     int sx = map->start_x;
     int sy = map->start_y;
 
-    /* Normal player start: one settler, one warrior, one scout.  The settler
-     * is placed first so the player can found the capital on the start tile. */
+    /* One settler, one warrior, and one scout are the baseline start.  Easy
+     * adds a second warrior; hard gives the rivals an extra warrior and a
+     * larger treasury instead. */
     spawn_near(world, map, UNIT_SETTLER, START_OWNER, sx, sy);
     spawn_near(world, map, UNIT_WARRIOR, START_OWNER, sx + 1, sy + 1);
     spawn_near(world, map, UNIT_SCOUT, START_OWNER, sx - 1, sy + 1);
+    if (world->difficulty == WORLD_DIFFICULTY_EASY) {
+        spawn_near(world, map, UNIT_WARRIOR, START_OWNER, sx, sy);
+    }
 
     spawn_rivals(world, map);
+    if (world->difficulty == WORLD_DIFFICULTY_HARD) {
+        spawn_raider_near(world, map, sx, sy, 8, 12);
+    }
     /* Rivals begin with a mild rivalry toward one another.  The player starts
      * neutral with everyone and chooses a path through gifts, treaties, or
      * war. */
     for (int a = 1; a <= WORLD_AI_COUNT; a++) {
-        world->civs[a].treasury = WORLD_AI_START_TREASURY;
+        int treasury = WORLD_AI_START_TREASURY;
+        if (world->difficulty == WORLD_DIFFICULTY_EASY) treasury -= 10;
+        if (world->difficulty == WORLD_DIFFICULTY_HARD) treasury += 20;
+        world->civs[a].treasury = treasury;
         for (int b = a + 1; b <= WORLD_AI_COUNT; b++) {
             world->relation[a][b] = -10;
             world->relation[b][a] = -10;
@@ -252,6 +272,10 @@ void World_Begin(World *world, Map *map) {
     snprintf(world->notice, sizeof(world->notice), "%s",
              Str(S_NOTICE_BARBARIANS));
     world->notice_turn = world->turn;
+}
+
+void World_Begin(World *world, Map *map) {
+    World_BeginWithDifficulty(world, map, WORLD_DIFFICULTY_NORMAL);
 }
 
 void World_UpdateVision(World *world, Map *map) {
@@ -717,6 +741,9 @@ void World_ProcessCities(World *world, Map *map) {
     for (int i = 0; i < world->cities.count; i++) {
         City *city = &world->cities.cities[i];
         int is_player = city->owner == START_OWNER;
+        /* Keep the wall cap and legacy combat fields current.  HP recovery is
+         * applied after all attacks at the end of the turn. */
+        City_UpdateCombat(city);
         uint32_t researched = World_CivResearched(world, city->owner);
         CityYield yield;
         City_ComputeYieldsWithTech(city, map, researched, &yield);
@@ -753,6 +780,12 @@ void World_ProcessCities(World *world, Map *map) {
             world->research_type = TECH_NONE;
             world->research_progress = 0;
         }
+    }
+}
+
+static void recover_cities(World *world) {
+    for (int i = 0; i < world->cities.count; i++) {
+        City_RecoverHP(&world->cities.cities[i], world->turn);
     }
 }
 
@@ -810,9 +843,11 @@ static void heal_units(World *world, Map *map) {
 void World_EndTurn(World *world, Map *map) {
     if (!world || !map) return;
 
+    TurnReport_Clear();
     World_ProcessCities(world, map);
     world->notice[0] = '\0';
     Ai_ProcessTurn(world, map);
+    recover_cities(world);
     Diplomacy_ProcessTurn(world);
     heal_units(world, map);
     Unit_ResetTurn(&world->units);
@@ -864,6 +899,21 @@ int World_FirstUnitWithMoves(const World *world) {
     return -1;
 }
 
+int World_NextUnitWithMoves(const World *world, int current) {
+    if (!world || world->units.count == 0) return -1;
+    int count = world->units.count;
+    int start = current;
+    if (start < 0 || start >= count) start = -1;
+    for (int step = 1; step <= count; step++) {
+        int index = (start + step) % count;
+        const Unit *unit = &world->units.units[index];
+        if (unit->owner == START_OWNER && unit->moves_left > 0) {
+            return index;
+        }
+    }
+    return -1;
+}
+
 int World_CycleUnit(const World *world, int current, int direction) {
     int count = world->units.count;
     if (count == 0) return -1;
@@ -904,6 +954,7 @@ int World_CaptureCity(World *world, Map *map, int city_index, int new_owner) {
     city->food_stored = 0;
     city->influence = 0;
     city->locked_mask = 0;
+    City_ResetCombat(city);
     City_AutoAssign(city, map);
 
     if (new_owner == START_OWNER) world->player_founded = 1;

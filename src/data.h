@@ -88,6 +88,7 @@ int Data_ImprovementRequiredTech(int improvement); /* TechType or TECH_NONE */
 StrId Data_TerrainName(int terrain);
 StrId Data_ResourceName(int resource);
 StrId Data_ImprovementName(int improvement);
+StrId Data_UnitName(int unit_type);
 StrId Data_CityName(int name_index);
 
 #endif

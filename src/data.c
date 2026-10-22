@@ -200,6 +200,18 @@ StrId Data_ImprovementName(int improvement) {
     }
 }
 
+StrId Data_UnitName(int unit_type) {
+    switch (unit_type) {
+        case UNIT_SETTLER:   return S_UNIT_SETTLER;
+        case UNIT_WARRIOR:   return S_UNIT_WARRIOR;
+        case UNIT_SCOUT:     return S_UNIT_SCOUT;
+        case UNIT_SWORDSMAN: return S_UNIT_SWORDSMAN;
+        case UNIT_HORSEMAN:  return S_UNIT_HORSEMAN;
+        case UNIT_WORKER:    return S_UNIT_WORKER;
+        default:             return S_UNIT_WARRIOR;
+    }
+}
+
 StrId Data_CityName(int name_index) {
     if (name_index < 0 || name_index >= CITY_NAME_COUNT) {
         return g_city_name_ids[0];

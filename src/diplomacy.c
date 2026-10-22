@@ -4,6 +4,7 @@
 
 #include "gen/strings_gen.h"
 #include "log.h"
+#include "turn_report.h"
 
 static int valid_rival(const World *world, int civ) {
     if (!world || civ < 1 || civ > WORLD_AI_COUNT) return 0;
@@ -27,6 +28,7 @@ static void set_proposal(World *world, int civ, int type) {
     world->proposal_cooldown = 6;
     Log_Printf("diplo: proposal civ=%d type=%d turn=%d", civ, type,
                world->turn);
+    TurnReport_AddProposal(civ, WORLD_CIV_PLAYER, type);
 
     if (world->notice[0] != '\0') return;
     StrId offer = S_DIPLO_OFFERS_PEACE;
@@ -163,6 +165,22 @@ int Diplomacy_GiftGain(const World *world, int civ) {
     if (relation + gain > 100) gain = 100 - relation;
     if (gain < 0) gain = 0;
     return gain;
+}
+
+int Diplomacy_CanDenounce(const World *world, int civ) {
+    if (!world || !rival_has_city(world, civ)) return 0;
+    if (world->denounce_used[civ]) return 0;
+    return World_Relation(world, WORLD_CIV_PLAYER, civ) > -100;
+}
+
+int Diplomacy_Denounce(World *world, int civ) {
+    if (!Diplomacy_CanDenounce(world, civ)) return DIPLO_ERR_STATE;
+    world->denounce_used[civ] = 1;
+    World_ChangeRelation(world, WORLD_CIV_PLAYER, civ,
+                         -DIPLO_DENOUNCE_PENALTY);
+    Log_Printf("diplo: denounced civ=%d relation=%d turn=%d", civ,
+               World_Relation(world, WORLD_CIV_PLAYER, civ), world->turn);
+    return DIPLO_DENOUNCE_PENALTY;
 }
 
 int Diplomacy_SendGift(World *world, int civ) {
@@ -364,6 +382,7 @@ static void ai_to_ai_diplomacy(World *world) {
                     Log_Printf("diplo: ai peace a=%d b=%d turn=%d", a, b,
                                world->turn);
                     World_MakePeace(world, a, b);
+                    TurnReport_AddPeace(a, b);
                 }
                 continue;
             }
@@ -388,6 +407,7 @@ static void ai_to_ai_diplomacy(World *world) {
                 Log_Printf("diplo: ai war a=%d b=%d turn=%d", a, b,
                            world->turn);
                 World_DeclareWar(world, a, b);
+                TurnReport_AddWar(a, b);
             }
         }
     }
@@ -494,6 +514,9 @@ static void update_diplomatic_victory(World *world) {
 void Diplomacy_ProcessTurn(World *world) {
     if (!world || world->game_over != WORLD_GAME_NONE) return;
 
+    for (int civ = 1; civ <= WORLD_AI_COUNT; civ++) {
+        world->denounce_used[civ] = 0;
+    }
     tick_treaties(world);
     process_trade(world);
     decay_relations(world);
