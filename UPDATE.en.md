@@ -2,6 +2,209 @@
 
 # UPDATE
 
+## V0.3.1 — Eight-Chord Music, Medics, and Forest Chops
+
+**Release date:** 2026-10-27
+**Type:** GitHub development snapshot (feature update)
+**Platforms:** PSP 1000 / PPSSPP
+
+V0.3.1 rebuilds the four era soundtracks, adds a non-combat medic and worker
+forest chopping, and removes dark terrain tile outlines. V0.3's era-music
+framework, smooth transitions, scout auto-explore, gold headings, and every
+existing system remain intact.
+
+### New features
+
+#### Eight-chord music
+
+- Each era still has peace and war loops of about eight seconds, but every loop
+  now uses **eight diatonic chords** at roughly one chord per second, with
+  major-seventh, minor-seventh, and dominant-seventh color.
+- Progressions: Ancient Am-F-C-G-Am-Dm-Fmaj7-Em; Classical
+  Cmaj7-Am-Fmaj7-G7-C-F-Dm7-G7; Medieval Gm-F-Eb-F-Gm-Cm-Eb-Dm7; Renaissance
+  D-A7-Bm7-F#m-Gmaj7-D-Em7-A7.
+- War variants keep the two-semitone downward transpose plus darker pads and
+  percussion. The loop-seam crossfade, roughly 0.4-second track crossfade, and
+  music toggle are unchanged.
+- Generated audio remains normalized to an 80% peak and the eight sound effects
+  are unchanged. `check_audio.py` still validates all 16 WAVs for format,
+  non-silence, and peak level.
+
+#### Medic
+
+- Adds `MEDIC`: cost 12, no technology prerequisite, 4 movement / 2 sight / 0
+  strength.
+- Medics are civilians and **cannot attack**; attacking a unit or city reports
+  "CIVILIANS CANNOT ATTACK".
+- A friendly unit resting within one tile (Chebyshev radius 1, including
+  diagonals) heals an extra **10 HP**, while still meeting the existing
+  rest/friendly-territory rules.
+- Multiple medics do not stack. Medics can move and explore but cannot found
+  cities or build worker improvements. The AI does not produce medics yet.
+
+#### Forest chop
+
+- A worker on an owned forest gains `CHOP FOREST` in the action menu.
+- The chop completes immediately and spends the worker's remaining movement.
+  Forest becomes grassland, **keeping the tile's resource and existing
+  improvement**.
+- The nearest owned city with a non-empty production queue receives **+20
+  production**, credited before its normal turn processing, so it can speed up
+  the current unit or building.
+- With no queue, the chop is rejected without consuming the forest or
+  movement, and the action explains that a queue is required. City centers,
+  unowned forest, and non-forest tiles do not offer the action; the API also
+  returns the corresponding error.
+- The action-menu capacity grows from four entries to six to fit repair, chop,
+  build, wait, and cancel.
+
+#### Terrain seams
+
+- Base terrain tiles no longer draw a dark rectangular outline. The
+  four-direction alpha transitions remain, so terrain changes stay soft without
+  a visible grid.
+- The terrain atlas grows from 128×256 to **256×256**, fitting six unit/city
+  icons per civilization row. City sprite indices are unchanged; the medic uses
+  the sixth column.
+- The transition atlas is regenerated from the unoutlined tiles so old border
+  colors cannot tint the blends.
+
+### Version and compatibility
+
+- The in-game version, boot log, and XMB art labels update to `V0.3.1`.
+- Saves remain **version 3**. `UNIT_MEDIC` and `PROD_MEDIC` are appended to
+  their enums, so V0.3 and older saves load directly.
+- A production queue containing the new medic is not understood by the old V0.3
+  reader; backward compatibility means V0.3.1 reads old saves, not the reverse.
+- The `v0.2`, `v0.2.1`, `v0.2.2`, and `v0.3` tags and packages stay frozen;
+  V0.3.1 uses a new `v0.3.1` tag and `release/v0.3.1/`.
+
+### Validation status
+
+- **Host tests:** `make test` passes all 14 suites plus i18n/audio. New
+  coverage includes medic stats/attack rejection/aura healing/non-stacking/
+  friendly-territory healing, forest-chop success and rejection cases, and
+  production credit.
+- **Assets:** `make assets` regenerates 524 strings, 570 Chinese glyphs, the
+  256×256 terrain atlas, and eight eight-chord music loops; i18n and audio
+  checks pass.
+- **Build:** `make -j$(nproc)` produces a roughly 4.6 MB `EBOOT.PBP` without
+  compiler warnings.
+- **PPSSPP:** the boot log reports `CIVITAS PSP V0.3.1` and
+  `audio: channel=7 44100Hz stereo, 8 era/mood music tracks`.
+- **PSP 1000:** final visual/audio acceptance of the medic, chop menu,
+  eight-chord loops, terrain seams, and gold headings remains pending. X11
+  captures are still black under WSLg.
+
+### Release files
+
+```text
+release/v0.3.1/EBOOT.PBP
+release/v0.3.1/civpsp-v0.3.1.zip
+release/v0.3.1/SHA256SUMS
+```
+
+### Checksums
+
+See [`release/v0.3.1/SHA256SUMS`](release/v0.3.1/SHA256SUMS).
+
+### Upgrading from V0.3
+
+Replace `EBOOT.PBP`; the save format and path are unchanged, and V0.3 saves
+load directly. The `v0.3` tag and `release/v0.3/` remain in their original
+published state.
+
+## V0.3 — Era Music, Smooth Terrain, and Scout Automation (history)
+
+**Release date:** 2026-10-27
+**Type:** GitHub development snapshot (feature release)
+**Platforms:** PSP 1000 / PPSSPP
+
+V0.3 adds era/peace-war background music, smooth terrain transitions, scout
+auto-explore, and gold-stamped menu headings. The V0.2.2 fog fix and every
+existing system remain intact.
+
+### New features
+
+#### Era and war music
+
+- Adds eight roughly 8-second loops: peace and war variants for the Ancient,
+  Classical, Medieval, and Renaissance eras.
+- Menus, the manual, Options, and New Game use Ancient/Peace. Map, city,
+  diplomacy, pause, save/load, and game-over screens select a loop from the
+  player's highest era and whether a living major rival is at war.
+- War variants are transposed down two semitones and add darker pads and
+  percussion. Track changes crossfade over roughly 0.4 seconds, and each loop
+  has a crossfaded seam.
+- The Options music toggle still works; the eight sound effects are unchanged.
+
+#### Smooth terrain transitions
+
+- A separate transition atlas blends each tile with explored left, right, up,
+  and down neighbours.
+- Transitions only face explored tiles, so fog of war still hides unexplored
+  terrain.
+- Transitions use linear filtering while base terrain stays pixel-crisp; the
+  detail layer, units, cities, fog, and cursor keep their existing draw order.
+
+#### Scout auto-explore
+
+- A scout's action menu gains an `AUTO-EXPLORE` toggle. Enabling it spends the
+  current movement immediately and repeats after movement resets each turn.
+- BFS picks the nearest reachable unexplored tile while avoiding impassable
+  terrain, cities, and all units; the scout stays put when no target exists.
+- The HUD appends `AUTO` to the unit label. The toggle lives in bit `0x80` of
+  `Unit.acted`, so the save layout is unchanged.
+
+#### Gold-stamped menu headings
+
+- Main menu, manual, Options, New Game, Pause, Save, and Load headings use
+  layered deep shadow, dark bevel, bright gold body, and top-left highlight
+  passes.
+- Headings use linear font filtering. The Chinese atlas now places each 16×16
+  glyph in an 18×18 cell with extra inter-cell spacing, preventing large text
+  from sampling adjacent glyphs.
+
+### Version and compatibility
+
+- The in-game version, boot log, and XMB art label are updated to `V0.3`.
+- Saves remain **version 3** and load in V0.2.2 / V0.2.1 / V0.2; older readers
+  ignore the auto-explore bit.
+- The `v0.2`, `v0.2.1`, and `v0.2.2` tags and packages stay frozen; V0.3 uses a
+  new tag and package.
+- The 14 host suites plus i18n/audio checks pass. `test_units` adds
+  auto-explore, reset preservation, end-turn integration, era detection, and
+  war-state detection; `test_save` checks the auto-explore high bit through a
+  save round-trip.
+
+### Validation status
+
+- **Host tests:** `make test` passes all 14 suites plus i18n/audio.
+- **Build:** `make` produces a `EBOOT.PBP` of roughly 4.5 MB.
+- **PPSSPP:** the boot log reports `CIVITAS PSP V0.3` and
+  `audio: channel=7 44100Hz stereo, 8 era/mood music tracks`.
+- **PSP 1000:** final visual/audio acceptance of the gold headings, terrain
+  transitions, and eight loops is still pending. X11 captures are still black
+  under WSLg.
+
+### Release files
+
+```text
+release/v0.3/EBOOT.PBP
+release/v0.3/civpsp-v0.3.zip
+release/v0.3/SHA256SUMS
+```
+
+### Checksums
+
+See [`release/v0.3/SHA256SUMS`](release/v0.3/SHA256SUMS).
+
+### Upgrading from V0.2.2
+
+Replace `EBOOT.PBP`; the save format and path are unchanged, and V0.2.2 saves
+load directly. The `v0.2.2` tag and `release/v0.2.2/` remain in their original
+published state.
+
 ## V0.2.2 — Fog-of-War Information Fix
 
 **Release date:** 2026-10-22
