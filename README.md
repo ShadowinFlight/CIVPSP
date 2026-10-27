@@ -6,7 +6,7 @@
 
 CIVITAS 使用 PSPSDK 和 PSP GU 2D API 开发，运行于 480×272 屏幕，采用固定 64×48 地图，面向 PSP 的短局 4X 体验。
 
-!\[CIVITAS 主菜单](assets\\src\\pic1.png)
+!\[CIVITAS 主菜单](assets/src/pic1.png)
 
 ## 目录
 
