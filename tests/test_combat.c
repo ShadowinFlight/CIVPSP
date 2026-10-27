@@ -92,11 +92,14 @@ static void test_errors_and_civilian(void) {
     int friendly = Unit_Spawn(&world.units, UNIT_WARRIOR, 0, 11, 10);
     int far = Unit_Spawn(&world.units, UNIT_WARRIOR, 1, 13, 10);
     int settler = Unit_Spawn(&world.units, UNIT_SETTLER, 0, 10, 11);
+    int medic = Unit_Spawn(&world.units, UNIT_MEDIC, 0, 12, 10);
     CHECK(Combat_CanAttack(&world, &map, warrior, friendly)
           == COMBAT_ERR_FRIENDLY);
     CHECK(Combat_CanAttack(&world, &map, warrior, far)
           == COMBAT_ERR_NOT_ADJACENT);
     CHECK(Combat_CanAttack(&world, &map, settler, far)
+          == COMBAT_ERR_CIVILIAN);
+    CHECK(Combat_CanAttack(&world, &map, medic, far)
           == COMBAT_ERR_CIVILIAN);
     world.units.units[warrior].moves_left = 0;
     CHECK(Combat_CanAttack(&world, &map, warrior, far)

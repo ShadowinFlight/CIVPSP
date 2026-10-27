@@ -179,6 +179,87 @@ static void test_build_and_yields(void) {
     CHECK(yield.gold == 2);
 }
 
+static void test_forest_chop(void) {
+    int worker_index = -1;
+    setup_city_and_worker(&worker_index);
+    Unit *worker = &units.units[worker_index];
+    City *city = &cities.cities[0];
+
+    set_tile(10, 11, TERRAIN_FOREST, RESOURCE_NONE);
+    CHECK(City_QueueAdd(city, PROD_WARRIOR) == CITY_QUEUE_OK);
+    CHECK(Improvement_CanChopForest(&map, &cities, worker)
+          == IMPROVEMENT_OK);
+
+    int credited_city = -1;
+    CHECK(Improvement_ChopForest(&map, &cities, worker, &credited_city)
+          == IMPROVEMENT_OK);
+    CHECK(credited_city == 0);
+    CHECK(map.tiles[11][10].terrain == TERRAIN_GRASSLAND);
+    CHECK(map.tiles[11][10].resource == RESOURCE_NONE);
+    CHECK(city->production_stored == IMPROVEMENT_FOREST_CHOP_PRODUCTION);
+    CHECK(worker->moves_left == 0);
+
+    /* A no-queue attempt must not remove the forest or consume movement. */
+    worker->moves_left = 4;
+    set_tile(10, 11, TERRAIN_FOREST, RESOURCE_NONE);
+    int stored = city->production_stored;
+    city->queue_count = 0;
+    CHECK(Improvement_CanChopForest(&map, &cities, worker)
+          == IMPROVEMENT_ERR_NO_QUEUE);
+    CHECK(Improvement_ChopForest(&map, &cities, worker, NULL)
+          == IMPROVEMENT_ERR_NO_QUEUE);
+    CHECK(map.tiles[11][10].terrain == TERRAIN_FOREST);
+    CHECK(worker->moves_left == 4);
+    CHECK(city->production_stored == stored);
+
+    /* A queued farther city gets the chop when the tile-owning city is empty. */
+    int second_city = -1;
+    CHECK(City_TryFound(&cities, &map, 0, 16, 10, &second_city)
+          == CITY_FOUND_OK);
+    CHECK(second_city == 1);
+    City *far_city = &cities.cities[second_city];
+    CHECK(City_QueueAdd(far_city, PROD_WARRIOR) == CITY_QUEUE_OK);
+    int far_stored = far_city->production_stored;
+    CHECK(Improvement_CanChopForest(&map, &cities, worker)
+          == IMPROVEMENT_OK);
+    int credited_far = -1;
+    CHECK(Improvement_ChopForest(&map, &cities, worker, &credited_far)
+          == IMPROVEMENT_OK);
+    CHECK(credited_far == second_city);
+    CHECK(far_city->production_stored
+          == far_stored + IMPROVEMENT_FOREST_CHOP_PRODUCTION);
+    CHECK(city->production_stored == stored);
+    CHECK(worker->moves_left == 0);
+
+    worker->moves_left = 4;
+    set_tile(10, 11, TERRAIN_FOREST, RESOURCE_NONE);
+    CHECK(City_QueueAdd(city, PROD_WARRIOR) == CITY_QUEUE_OK);
+    CHECK(Improvement_CanChopForest(&map, &cities, worker)
+          == IMPROVEMENT_OK);
+
+    Unit warrior = { UNIT_WARRIOR, 0, 4, 10, 11, UNIT_HP_MAX, 0 };
+    CHECK(Improvement_CanChopForest(&map, &cities, &warrior)
+          == IMPROVEMENT_ERR_NOT_WORKER);
+
+    worker->x = 20;
+    worker->y = 20;
+    set_tile(20, 20, TERRAIN_FOREST, RESOURCE_NONE);
+    CHECK(Improvement_CanChopForest(&map, &cities, worker)
+          == IMPROVEMENT_ERR_NOT_OWNED);
+
+    worker->x = 10;
+    worker->y = 10;
+    set_tile(10, 10, TERRAIN_FOREST, RESOURCE_NONE);
+    CHECK(Improvement_CanChopForest(&map, &cities, worker)
+          == IMPROVEMENT_ERR_CITY);
+
+    worker->x = 10;
+    worker->y = 11;
+    set_tile(10, 11, TERRAIN_GRASSLAND, RESOURCE_NONE);
+    CHECK(Improvement_CanChopForest(&map, &cities, worker)
+          == IMPROVEMENT_ERR_NO_FOREST);
+}
+
 static void test_road_speed(void) {
     flat_map();
     map.tiles[11][12].improvement = IMPROVEMENT_ROAD;
@@ -195,12 +276,14 @@ int main(void) {
     test_prerequisites_and_ownership();
     test_terrain_rules();
     test_build_and_yields();
+    test_forest_chop();
     test_road_speed();
 
     if (failures) {
         printf("%d improvement test(s) failed\n", failures);
         return 1;
     }
-    printf("PASS: worker, tech-gated improvements, terrain rules, and roads\n");
+    printf("PASS: worker, tech-gated improvements, terrain rules, forest "
+           "chop, and roads\n");
     return 0;
 }

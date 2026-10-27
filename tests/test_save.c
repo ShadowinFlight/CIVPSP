@@ -30,6 +30,7 @@ static void init_fixture(Map *map, World *world, SaveView *view) {
     world->units.units[0].x = (int8_t)map->start_x;
     world->units.units[0].y = (int8_t)map->start_y;
     world->units.units[0].hp = 80;
+    world->units.units[0].acted = UNIT_AUTO_EXPLORE_FLAG;
     world->cities.count = 1;
     world->cities.cities[0].owner = WORLD_CIV_PLAYER;
     world->cities.cities[0].name_index = 0;
@@ -101,6 +102,7 @@ static void test_round_trip(void) {
     CHECK(loaded_world.cities.cities[0].hp == 80);
     CHECK(loaded_world.cities.cities[0].defense == 40);
     CHECK(loaded_world.difficulty == WORLD_DIFFICULTY_HARD);
+    CHECK(Unit_AutoExploreEnabled(&loaded_world.units.units[0]));
 
     /* The endless mode writes no turn limit. */
     CHECK(Save_WritePath(path, &map, &world, &view, SAVE_MODE_ENDLESS, 200u,

@@ -2,7 +2,9 @@
 #include <string.h>
 
 #include "city.h"
+#include "combat.h"
 #include "map.h"
+#include "tech.h"
 #include "unit.h"
 #include "world.h"
 
@@ -284,6 +286,162 @@ static void test_difficulty_setup(void) {
     CHECK(World_CountUnits(&world, WORLD_CIV_BARBARIAN) >= 2);
 }
 
+static int explored_count(void) {
+    int count = 0;
+    for (int y = 0; y < MAP_HEIGHT; y++) {
+        for (int x = 0; x < MAP_WIDTH; x++) {
+            if (map.tiles[y][x].explored) count++;
+        }
+    }
+    return count;
+}
+
+static void test_auto_explore(void) {
+    flat_map();
+    Map_ResetFog(&map);
+    World_Init(&world);
+
+    int index = Unit_Spawn(&world.units, UNIT_SCOUT, WORLD_CIV_PLAYER,
+                           10, 10);
+    CHECK(index == 0);
+    Unit_SetAutoExplore(&world.units.units[0], 1);
+    CHECK(Unit_AutoExploreEnabled(&world.units.units[0]));
+    CHECK((world.units.units[0].acted & UNIT_ACTED_MASK) == 0);
+
+    Map_MarkVisibleArea(&map, 10, 10, Unit_TypeSight(UNIT_SCOUT));
+    int before = explored_count();
+    int start_x = world.units.units[0].x;
+    int start_y = world.units.units[0].y;
+    int steps = World_AutoExploreScout(&world, &map, index);
+    CHECK(steps > 0);
+    CHECK(world.units.units[0].x != start_x
+          || world.units.units[0].y != start_y);
+    CHECK(explored_count() > before);
+    CHECK(Unit_AutoExploreEnabled(&world.units.units[0]));
+    CHECK(world.units.units[0].moves_left < 8);
+
+    world.units.units[0].acted |= 0x01u;
+    Unit_ResetTurn(&world.units);
+    CHECK(Unit_AutoExploreEnabled(&world.units.units[0]));
+    CHECK((world.units.units[0].acted & UNIT_ACTED_MASK) == 0);
+    CHECK(world.units.units[0].moves_left == 8);
+
+    /* The end-turn path should run auto-explore for flagged scouts without
+     * clearing the saved high-bit toggle. */
+    flat_map();
+    Map_ResetFog(&map);
+    World_Init(&world);
+    index = Unit_Spawn(&world.units, UNIT_SCOUT, WORLD_CIV_PLAYER, 10, 10);
+    Map_MarkVisibleArea(&map, 10, 10, Unit_TypeSight(UNIT_SCOUT));
+    Unit_SetAutoExplore(&world.units.units[index], 1);
+    start_x = world.units.units[index].x;
+    start_y = world.units.units[index].y;
+    world.turn = 1;
+    World_EndTurn(&world, &map);
+    CHECK(world.turn == 2);
+    CHECK(world.units.units[index].x != start_x
+          || world.units.units[index].y != start_y);
+    CHECK(Unit_AutoExploreEnabled(&world.units.units[index]));
+    CHECK((world.units.units[index].acted & UNIT_ACTED_MASK) == 0);
+
+    Unit_SetAutoExplore(&world.units.units[index], 0);
+    CHECK(!Unit_AutoExploreEnabled(&world.units.units[index]));
+}
+
+static void test_medic_support(void) {
+    CHECK(Unit_TypeMovePoints(UNIT_MEDIC) == 4);
+    CHECK(Unit_TypeSight(UNIT_MEDIC) == 2);
+    CHECK(g_unit_defs[UNIT_MEDIC].strength == 0);
+    CHECK(Data_UnitName(UNIT_MEDIC) != Data_UnitName(UNIT_WARRIOR));
+
+    const ProductionDef *medic = Data_ProductionDef(PROD_MEDIC);
+    CHECK(medic != NULL);
+    CHECK(medic && medic->kind == PROD_KIND_UNIT);
+    CHECK(medic && medic->unit_type == UNIT_MEDIC);
+    CHECK(medic && medic->cost == 12);
+    CHECK(medic && medic->required_tech == TECH_NONE);
+
+    flat_map();
+    Map_ResetFog(&map);
+    World_Init(&world);
+    int medic_a = Unit_Spawn(&world.units, UNIT_MEDIC, WORLD_CIV_PLAYER,
+                             10, 10);
+    int medic_b = Unit_Spawn(&world.units, UNIT_MEDIC, WORLD_CIV_PLAYER,
+                             11, 10);
+    int rested = Unit_Spawn(&world.units, UNIT_WARRIOR, WORLD_CIV_PLAYER,
+                            10, 11);
+    int moved = Unit_Spawn(&world.units, UNIT_WARRIOR, WORLD_CIV_PLAYER,
+                           20, 20);
+    int lone = Unit_Spawn(&world.units, UNIT_WARRIOR, WORLD_CIV_PLAYER,
+                          20, 21);
+    CHECK(medic_a >= 0 && medic_b >= 0 && rested >= 0);
+    CHECK(moved >= 0 && lone >= 0);
+    world.units.units[rested].hp = 50;
+    world.units.units[moved].hp = 50;
+    world.units.units[lone].hp = 50;
+    world.units.units[moved].moves_left = 5;
+
+    int enemy = Unit_Spawn(&world.units, UNIT_WARRIOR, 1, 11, 11);
+    CHECK(enemy >= 0);
+    CHECK(Combat_CanAttack(&world, &map, medic_a, enemy)
+          == COMBAT_ERR_CIVILIAN);
+
+    world.turn = 1;
+    World_EndTurn(&world, &map);
+    CHECK(world.units.units[rested].hp == 70); /* 10 neutral + 10 medic */
+    CHECK(world.units.units[moved].hp == 50);  /* rested units only */
+    CHECK(world.units.units[lone].hp == 60);   /* no medic nearby */
+
+    /* Friendly territory doubles the base heal; the medic bonus stays a
+     * single flat +10. */
+    flat_map();
+    Map_ResetFog(&map);
+    World_Init(&world);
+    int city_index = -1;
+    CHECK(City_TryFound(&world.cities, &map, WORLD_CIV_PLAYER, 10, 10,
+                        &city_index) == CITY_FOUND_OK);
+    int friendly_medic = Unit_Spawn(&world.units, UNIT_MEDIC,
+                                    WORLD_CIV_PLAYER, 10, 11);
+    int friendly_warrior = Unit_Spawn(&world.units, UNIT_WARRIOR,
+                                      WORLD_CIV_PLAYER, 11, 10);
+    CHECK(city_index == 0);
+    CHECK(friendly_medic >= 0 && friendly_warrior >= 0);
+    world.units.units[friendly_warrior].hp = 50;
+    world.player_founded = 1;
+    world.turn = 1;
+    World_EndTurn(&world, &map);
+    CHECK(world.units.units[friendly_warrior].hp == 80); /* 20 + 10 */
+}
+
+static void test_era_and_war_state(void) {
+    World_Init(&world);
+    CHECK(World_PlayerEra(&world) == ERA_ANCIENT);
+
+    world.researched = 1u << TECH_MATHEMATICS;
+    CHECK(World_PlayerEra(&world) == ERA_CLASSICAL);
+    world.researched |= 1u << TECH_EDUCATION;
+    CHECK(World_PlayerEra(&world) == ERA_MEDIEVAL);
+    world.researched |= 1u << TECH_PRINTING;
+    CHECK(World_PlayerEra(&world) == ERA_RENAISSANCE);
+
+    CHECK(!World_PlayerAtWar(&world));
+    world.civs[1].active = 1;
+    world.civs[0].at_war_mask = 1u << 1;
+    world.civs[1].at_war_mask = 1u << 0;
+    CHECK(World_AreAtWar(&world, 0, 1));
+    CHECK(World_PlayerAtWar(&world));
+
+    world.civs[2].active = 1;
+    world.civs[0].at_war_mask = 0;
+    world.civs[1].at_war_mask = 0;
+    CHECK(!World_PlayerAtWar(&world));
+
+    /* Barbarians are permanently hostile but must not select war music. */
+    world.civs[WORLD_CIV_BARBARIAN].active = 1;
+    CHECK(World_AreAtWar(&world, 0, WORLD_CIV_BARBARIAN));
+    CHECK(!World_PlayerAtWar(&world));
+}
+
 int main(void) {
     test_movement_costs();
     test_unit_movement();
@@ -291,9 +449,13 @@ int main(void) {
     test_world_founding_and_turn();
     test_world_start_and_vision();
     test_difficulty_setup();
+    test_auto_explore();
+    test_medic_support();
+    test_era_and_war_state();
 
     if (failures == 0) {
-        printf("PASS: unit movement, city founding, turns, and start setup\n");
+        printf("PASS: unit movement, city founding, turns, auto-explore, "
+               "medic healing, music state, and start setup\n");
         return 0;
     }
     fprintf(stderr, "%d check(s) failed\n", failures);
