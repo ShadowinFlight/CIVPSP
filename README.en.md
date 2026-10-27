@@ -7,7 +7,7 @@
 CIVITAS is built with PSPSDK and the PSP GU 2D API. It runs at 480×272 on a
 fixed 64×48 map and is designed for short-session 4X play on the PSP.
 
-!\[CIVITAS main menu](PIC1.PNG)
+!\[CIVITAS main menu](assets\\src\\pic1.png)
 
 ## Contents
 
@@ -127,12 +127,12 @@ indices are unchanged.
 
 ### Compatibility and validation
 
-* Saves remain **version 3**. `UNIT\\\\\\\_MEDIC`, `PROD\\\\\\\_MEDIC`, and related enum
+* Saves remain **version 3**. `UNIT\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\_MEDIC`, `PROD\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\_MEDIC`, and related enum
 values are appended, so V0.3 and older saves load directly.
-* The 14 host suites, i18n, and audio checks pass. `test\\\\\\\_units` covers medic
+* The 14 host suites, i18n, and audio checks pass. `test\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\_units` covers medic
 stats, attack rejection, aura healing, non-stacking, and friendly-territory
-healing; `test\\\\\\\_improvements` covers chop success, rejection cases, and
-production credit; `test\\\\\\\_combat` covers the civilian attack error.
+healing; `test\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\_improvements` covers chop success, rejection cases, and
+production credit; `test\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\_combat` covers the civilian attack error.
 * The PPSSPP boot log reports `CIVITAS PSP V0.3.1`. WSLg captures are still
 black, so final visual and audio acceptance remains pending on hardware.
 * The `v0.3` tag and `release/v0.3/` stay frozen; V0.3.1 uses a new tag and
@@ -186,7 +186,7 @@ cells so large text stays smooth without sampling adjacent glyphs.
 
 * Saves remain **version 3** and load in V0.2.2 / V0.2.1 / V0.2; older readers
 ignore the auto-explore bit.
-* The 14 host suites still pass. `test\\\\\\\_units` adds auto-explore, reset
+* The 14 host suites still pass. `test\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\_units` adds auto-explore, reset
 preservation, end-turn integration, era detection, and war-state coverage;
 i18n and generated-audio checks pass.
 * The `v0.2`, `v0.2.1`, and `v0.2.2` tags and packages stay frozen; V0.3 uses a
@@ -221,7 +221,7 @@ result.
 recorded only on player-visible tiles, so the briefing does not leak fog of
 war.
 * The queue holds at most 32 events and is not saved. New game, load,
-dismissal, and the start of `World\\\\\\\_EndTurn` clear it.
+dismissal, and the start of `World\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\_EndTurn` clear it.
 
 ### City combat and modes (V0.2 base)
 
@@ -306,16 +306,16 @@ make test
 ```
 
 The V0.3.1 gate runs **14 host suites** plus Chinese/English and
-generated-audio checks. `test\\\\\\\_units` adds medic stats, attack rejection, aura
+generated-audio checks. `test\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\_units` adds medic stats, attack rejection, aura
 healing, non-stacking, and friendly-territory healing while keeping
 auto-explore, acted-bit preservation across reset, end-turn integration, era
-detection, and war-state detection. `test\\\\\\\_improvements` adds chop success,
+detection, and war-state detection. `test\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\_improvements` adds chop success,
 no-queue/unowned/city-center/non-forest rejection, and production credit;
-`test\\\\\\\_combat` covers the medic civilian attack error. `test\\\\\\\_save` checks that
+`test\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\_combat` covers the medic civilian attack error. `test\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\_save` checks that
 the auto-explore high bit survives a save round-trip. The existing suites
 continue to cover city assault, garrison shielding, walls/repair/HP recovery,
 denouncement, difficulty starts, save v3 round-trips, and v2 migration.
-`check\\\\\\\_audio.py` validates all eight music loops and eight sound effects,
+`check\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\_audio.py` validates all eight music loops and eight sound effects,
 rejecting stale `ambient.wav`.
 
 ### Run in PPSSPP
@@ -364,7 +364,7 @@ moved.
 │   ├── world.c          civilizations, turns, economy, scoring, difficulty
 │   ├── combat.c         damage, defense, city assault, capture
 │   ├── diplomacy.c      relations, treaties, trade, denouncement
-│   ├── turn\\\\\\\_report.c    AI/end-turn event briefing queue
+│   ├── turn\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\_report.c    AI/end-turn event briefing queue
 │   ├── save.c           version-3 save format and v2 migration
 │   ├── audio.c          audio thread and mixer
 │   ├── text.c           English/Chinese text rendering
@@ -380,7 +380,7 @@ moved.
 ├── ICON0.PNG / PIC1.PNG
 ├── UPDATE.md
 ├── UPDATE.en.md
-├── PROJECT\\\\\\\_PLAN.md
+├── PROJECT\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\_PLAN.md
 └── README.md / README.en.md
 ```
 
@@ -400,8 +400,8 @@ moved.
 * 14 host test suites: map, units, city, tech, improvements, combat,
 turn-report queue, AI, diplomacy, analog, save, M7 scoring, M8 tech/science,
 M9 i18n
-* `tools/check\\\\\\\_i18n.py`: translation coverage, placeholders, glyphs, width
-* `tools/check\\\\\\\_audio.py`: WAV format, non-silent peaks, all eight music loops,
+* `tools/check\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\_i18n.py`: translation coverage, placeholders, glyphs, width
+* `tools/check\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\_audio.py`: WAV format, non-silent peaks, all eight music loops,
 and stale `ambient.wav` removal
 
 PPSSPP has exercised the main menu, manual, map, city tabs, diplomacy, saves,
