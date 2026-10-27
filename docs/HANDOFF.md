@@ -7,24 +7,24 @@ current.
 
 - Path: `/home/zhang/pspGameDev/civpsp`
 - Plan: `PROJECT_PLAN.md`
-- Current release: **V0.2.2, fog-of-war HUD fix**; tag `v0.2.2` marks
-  this snapshot. V0.2.1 is the previous release at commit `3be14b6`, tag
-  `v0.2.1`; V0.2 is at `c733769`, tag `v0.2`; V0.1 is at `0065c61`, tag `v0.1`.
-- Release package: `release/v0.2.2/` (`EBOOT.PBP`, `civpsp-v0.2.2.zip`,
+- Current release: **V0.3.1, eight-chord harmony, medic, forest chops, and seam
+  cleanup**; tag `v0.3.1` marks this snapshot. V0.3 is at `9fd3b46`, tag
+  `v0.3`; V0.2.2 is at `d5da6d2`, tag `v0.2.2` (annotated tag object
+  `c3020ef`); V0.2.1 is at `3be14b6`, tag `v0.2.1`; V0.2 is at `c733769`, tag
+  `v0.2`; V0.1 is at `0065c61`, tag `v0.1`.
+- Release package: `release/v0.3.1/` (`EBOOT.PBP`, `civpsp-v0.3.1.zip`,
   `SHA256SUMS`); notes: `UPDATE.md` and `UPDATE.en.md`; public README:
   `README.md` and `README.en.md`.
 - Bilingual docs: `README.md` / `UPDATE.md` are Simplified Chinese;
   `README.en.md` / `UPDATE.en.md` are English. Keep both language selectors
   and cross-links in sync.
-- V0.2.2 stops the bottom status bar and tile info panel from showing enemy
-  units on non-visible tiles and cities on unexplored tiles. V0.2.1 adds a
-  centered turn-start briefing for AI/end-turn battles and diplomacy;
-  player-initiated attacks keep
-  the existing bottom toast. The city overview shows only HP and the
-  damage-absorbing `城防` pool, while the old `City_Defense` strength still
-  affects damage internally. The briefing queue is transient and is not saved.
-  `v0.2` and `v0.2.1` and their release directories remain at their original
-  released states.
+- V0.3.1 uses eight diatonic one-second chords per era loop, adds the
+  non-combat medic and worker forest chop, and removes dark terrain tile
+  outlines. It keeps V0.3's era/peace-war music playback, smooth transitions,
+  per-scout auto-explore, and gold headings, plus V0.2.2's fog fix, V0.2.1's
+  briefing, and V0.2's city combat/difficulty/modes. Save version remains 3;
+  `UNIT_MEDIC` and `PROD_MEDIC` are appended. The `v0.2`, `v0.2.1`, `v0.2.2`,
+  and `v0.3` tags/packages remain unchanged.
 - M0: `71408a2` (tag `m0`)
 - M1: `4272caa` (tag `m1` on `b88ffd7`)
 - M1.1 map tuning: `3a51f87`
@@ -63,6 +63,75 @@ APPIMAGE_EXTRACT_AND_RUN=1 \
 Use the absolute path to `EBOOT.PBP` to smoke-test the packaged build.
 
 ## What works
+
+### V0.3.1 (implementation complete, release packaged)
+
+- `tools/gen_audio.py`: every era/peace-war loop now has eight diatonic
+  one-second chords with `maj7`/`m7`/`dom7` voicings. Progressions: Ancient
+  Am-F-C-G-Am-Dm-Fmaj7-Em; Classical Cmaj7-Am-Fmaj7-G7-C-F-Dm7-G7; Medieval
+  Gm-F-Eb-F-Gm-Cm-Eb-Dm7; Renaissance D-A7-Bm7-F#m-Gmaj7-D-Em7-A7. War keeps
+  the two-semitone transpose, darker pads/drums, and 0.4-second crossfade.
+- `src/unit.*` / `src/data.*` / `src/world.c`: `UNIT_MEDIC` is appended after
+  worker and `PROD_MEDIC` after worker production. Medic costs 12, has 4 move /
+  2 sight / 0 strength, is rejected by `Combat_CanAttack` as
+  `COMBAT_ERR_CIVILIAN`, and adds `UNIT_MEDIC_HEAL_BONUS` (+10) when a friendly
+  damaged unit rests within Chebyshev radius 1. `medic_support_at` stops after
+  the first match, so medics do not stack.
+- `src/improvement.*` / `src/city.*`: `Improvement_CanChopForest` requires a
+  worker with movement, an owned non-city forest tile, and a nearest same-owner
+  city with a non-empty queue. `Improvement_ChopForest` credits
+  `IMPROVEMENT_FOREST_CHOP_PRODUCTION` (+20) through `City_AddProduction`,
+  changes forest to grassland while keeping resource/improvement, and spends all
+  movement. `IMPROVEMENT_ERR_NO_FOREST` and `IMPROVEMENT_ERR_NO_QUEUE` were
+  appended.
+- `src/mapview.c`: worker menu adds `CHOP FOREST` on owned forest even before a
+  queue exists, so the action can explain the missing prerequisite; arrays use
+  `ACTION_MENU_MAX 6`. Medic maps to sprite column 5, and civilian attacks show
+  `S_MSG_CIVILIAN_CANNOT_ATTACK`.
+- `tools/gen_art.py`: terrain atlas width is 256 so each owner row holds six
+  icons; the dark tile `outline=border` call is gone. The transition atlas stays
+  128×256 and is regenerated from the unoutlined tiles.
+- Validation: `make test` passes 14 host suites plus i18n/audio; `make assets`
+  reports 524 strings and 570 Chinese glyphs; `make -j$(nproc)` builds without
+  warnings. PPSSPP boot log reports `CIVITAS PSP V0.3.1` and eight era/mood
+  tracks.
+- Remaining: medic/chop gameplay smoke, new chord audition, terrain-seam/gold
+  title visuals, and the V0.2.2 fog-HUD retest on PSP 1000. WSLg captures are
+  black.
+
+### V0.3 (historical; era music, smooth terrain, auto-explore, gold titles)
+
+- `tools/gen_audio.py` / `src/audio.*`: eight ~8-second loops (Ancient,
+  Classical, Medieval, Renaissance × peace/war). `Audio_SetMusicTrack` mixes a
+  0.4-second crossfade; war variants transpose down two semitones and add
+  darker pads/percussion. `src/app.c:music_for_state` maps play screens to
+  `era * 2 + world_at_war` and menus to Ancient/Peace. `ambient.wav` is gone.
+- `tools/gen_art.py` / `assets/src/transition_atlas.png` /
+  `src/gen/transition_gen.h`: 128×256 RGBA atlas with four directions and nine
+  terrain types. Blend colors are sampled from the neighbouring tile's facing
+  edge. `src/mapview.c` only blends toward explored neighbours; half-texel
+  inset UVs and linear filtering avoid atlas bleed. Renderer order is base
+  sprites → transitions → detail sprites/rects → text.
+- `src/unit.*` / `src/world.*` / `src/mapview.c`: `Unit_AutoExploreEnabled`,
+  `Unit_SetAutoExplore`, `World_AutoExploreScout`, and
+  `World_AutoExploreScouts`. The toggle uses `Unit.acted & 0x80`; reset keeps
+  that bit and clears acted bits with `UNIT_ACTED_MASK`. BFS targets the nearest
+  unexplored passable tile while avoiding units/cities. End-turn auto-explore
+  runs after `Unit_ResetTurn`; the HUD adds `AUTO`.
+- `src/app.c`: `draw_gold_title` uses shadow, top-left highlight, dark bevel,
+  mid-gold, and body passes; it switches font sampling to linear for the title
+  and restores nearest afterward. Applied to main/help/options/new game/pause/
+  save/load headings.
+- `tools/gen_font.py` / `tools/pack_atlas.py`: CJK glyph content is 16×16 in
+  padded 18×18 cells; advances and quads remain 16×16.
+- Save compatibility: version 3 layout unchanged; auto-explore bit round-trips
+  through save/load. `tests/test_save.c` covers the high bit;
+  `tests/test_units.c` covers toggle/reset/end-turn/era/war.
+- Validation: `make test` passes 14 host suites plus i18n/audio; `make -j4`
+  builds without warnings. PPSSPP boot log reports `CIVITAS PSP V0.3` and
+  `audio: channel=7 44100Hz stereo, 8 era/mood music tracks`.
+- Remaining: gold title, transition, and loop audition/visual check on PSP
+  1000. WSLg captures are black.
 
 ### V0.2.2 (implementation complete, release packaged)
 
@@ -540,7 +609,7 @@ Use the absolute path to `EBOOT.PBP` to smoke-test the packaged build.
 
 ## Known issues
 
-- V0.2.2 package has not yet had a final PSP 1000 hardware pass. PPSSPP is the
+- V0.3.1 package has not yet had a final PSP 1000 hardware pass. PPSSPP is the
   primary target; do not describe hardware validation as complete.
 - Save compatibility starts at v2. Pre-v2 development snapshots are rejected;
   v2 Standard migrates to Classic 200 and v2 Timed migrates to Endless.
@@ -556,26 +625,62 @@ Use the absolute path to `EBOOT.PBP` to smoke-test the packaged build.
   pillaging, worker automation, or multi-turn improvements.
 - AI expansion and combat remain intentionally light. Difficulty changes
   starting units, AI treasury, war timing/relation thresholds, and barbarian
-  spawning; it is not a full AI production/combat handicap yet.
+  spawning; it is not a full AI production/combat handicap yet. The AI does not
+  produce or use medics, and forest chopping is player-only.
 - Endless has no turn limit. Classic resolves by score at the selected
   100/200/300-turn limit; conquest/science/diplomacy can still end earlier.
-- The README still uses a V0.1 main-menu screenshot; new V0.2.2 screenshots have
+- The README still uses a V0.1 main-menu screenshot; new V0.3.1 screenshots have
   not been captured.
 - The minimap toggle is `L` only; there is no settings-menu option. Audio has
-  one active SFX voice plus the ambient loop.
+  one active SFX voice plus the selected background-music loop.
 
 ## Next tasks
 
-1. Run the V0.2.2 checklist below on PSP 1000 hardware if available. This is
-   the only remaining release gate; PPSSPP functional smoke already passed.
-2. Capture V0.2.2 screenshots once a working capture path is available, and
+1. Run the V0.3.1 checklist below on PSP 1000 hardware if available. This is
+   the only remaining release gate; host tests, asset checks, the build, and
+   PPSSPP boot already pass.
+2. Capture V0.3.1 screenshots once a working capture path is available, and
    replace the V0.1 main-menu image in both READMEs.
-3. Post-V0.2.2 candidates: worker work timer, ranged/siege units, border
-   movement gating, resource trading, richer difficulty AI bonuses, and
-   visual/layout polish from hardware feedback.
+3. Post-V0.3.1 candidates: AI medic production, worker work timer,
+   ranged/siege units, border movement gating, resource trading, richer
+   difficulty AI bonuses, and visual/layout polish from hardware feedback.
 4. For any later change: run `make assets` after string/art edits, then
    `make -j4 && make test`, rebuild the package, and verify the ZIP and
    `SHA256SUMS`.
+
+### V0.3.1 PSP 1000 / PPSSPP checklist
+
+1. Boot the packaged `EBOOT.PBP`; confirm the log says `CIVITAS PSP V0.3.1`,
+   the Chinese main menu appears, and ICON0/PIC1 show `V0.3.1 DEV` /
+   `V0.3.1 BUILD`.
+2. Check the gold headings on Main, Help, Options, New Game, Pause, Save, and
+   Load: bright gold body, top-left highlight, dark bevel/shadow, no pale ghost
+   over the whole glyph. Switch to English and back to check both fonts.
+3. On the map, confirm explored terrain boundaries blend on all four sides
+   without dark tile grid lines, resource/improvement icons stay crisp above the
+   blend, and the fog boundary never shows an unexplored neighbour's terrain
+   color.
+4. Queue and produce a medic. Confirm the sprite/name, 4 movement and 2 sight,
+   movement and exploration, and that attacking a unit or city shows
+   `CIVILIANS CANNOT ATTACK`. Damage a friendly unit, rest it next to one and
+   then two medics, and confirm +10 aura healing does not stack. Repeat in
+   friendly territory and confirm 20 + 10 = 30 base healing.
+5. Queue a unit/building in an owned city, move a worker onto owned forest, and
+   use `CHOP FOREST`. Confirm the forest becomes grassland, resource and
+   improvement remain, the worker's movement is spent, and the nearest queued
+   city gains +20 production. Try again with no queue, on unowned forest, and
+   on the city center; confirm the actions are rejected without side effects.
+6. Let each era play while music is on. Confirm the new eight-chord movement
+   and seventh color, no loop click, and a smooth crossfade when entering a new
+   era or war. Toggle music in Options and verify SFX still duck the music.
+7. Select a scout, open `Triangle`, enable auto-explore, and confirm immediate
+   movement plus the HUD `AUTO` suffix. Disable/enable it, end turns, and load a
+   save to confirm the toggle persists. Confirm scouts stop with no reachable
+   unexplored tile.
+8. Load a V0.3 or V0.2.2 save, confirm it opens, recheck the V0.2.2 fog HUD rule
+   (hidden enemy units/cities do not appear in the bottom bar or tile panel),
+   and quit cleanly. Report any crash, soft lock, missing glyph, overlap, audio
+   glitch, or input lag.
 
 ### V0.2.2 PSP 1000 / PPSSPP checklist
 
@@ -667,8 +772,9 @@ Use the absolute path to `EBOOT.PBP` to smoke-test the packaged build.
   and generated PCM arrays.
 - `assets/src/audio/*.wav` — Python-generated preview SFX/ambient;
   `tools/check_audio.py` verifies they are non-silent.
-- `assets/strings.csv` — 512 English/Chinese UI strings, including the
-  V0.2.1 `REPORT_*` turn-briefing strings.
+- `assets/strings.csv` — 524 English/Chinese UI strings, including the
+  V0.2.1 `REPORT_*` turn-briefing strings and V0.3.1 medic/chop/version
+  strings.
 - `tools/gen_art.py`, `tools/gen_font.py`, `tools/gen_audio.py`,
   `tools/pack_atlas.py`, `tools/gen_strings.py`, `tools/check_i18n.py` —
   assets/translation/audio pipeline.
@@ -681,11 +787,54 @@ Use the absolute path to `EBOOT.PBP` to smoke-test the packaged build.
 - `docs/GAME_DATA.md` — complete unit/building/terrain/tech/economy data sheet.
 - `docs/screenshots/m2_*.png`, `m3_*.png`, `m4_*.png`, `m41_*.png`,
   `m8_*.png`, `m9_*.png`, and `v0.1_main.png` — validation captures. No
-  V0.2.2 screenshots exist yet.
+  V0.3.1 screenshots exist yet.
 
 ## Decisions
 
-See `docs/DECISIONS.md` for the full history. Current V0.2.2 decisions:
+See `docs/DECISIONS.md` for the full history. Current V0.3.1 decisions:
+
+- Each era loop uses eight diatonic one-second chords with seventh voicings;
+  war keeps the two-semitone transpose and darker arrangement. This replaces
+  four two-second triads while preserving the eight-loop playback and
+  crossfade system.
+- The medic is appended as `UNIT_MEDIC`/`PROD_MEDIC` for save-v3 compatibility,
+  costs 12, has 4/2/0 stats, adds a non-stacking +10 healing aura at Chebyshev
+  radius 1, and is rejected as a civilian attacker.
+- Forest chop is instant, costs all movement, requires an owned non-city forest
+  and a nearest same-owner city with a non-empty queue, grants +20 production,
+  and changes only terrain to grassland while keeping resource/improvement.
+- `City_AddProduction` is the single credit helper; normal end-turn processing
+  still decides when the queue item completes.
+- Terrain tile outlines are removed and the atlas grows to 256×256 for six
+  icons per owner row. The transition atlas stays 128×256 and still blends only
+  toward explored neighbours.
+- The action menu capacity is six entries (`ACTION_MENU_MAX`); chop is visible
+  on valid owned forest even with no queue so the error message can explain the
+  prerequisite.
+- Auto-explore is a persistent per-scout toggle stored in bit `0x80` of
+  `Unit.acted`. The low seven bits remain the old acted bookkeeping, and
+  `Unit_ResetTurn` preserves only the high bit while clearing the rest. This
+  keeps save version 3 unchanged.
+- Auto-explore uses an 8-direction BFS for the nearest unexplored passable tile
+  and the existing A* pathfinder for the first step; it avoids cities and all
+  units and runs after movement reset at end turn.
+- Background music has eight generated loops in era order with peace/war pairs;
+  war variants transpose down two semitones and add darker pads and drums.
+  Track changes crossfade over 0.4 seconds. Play states use
+  `era * 2 + at_war`; menus use Ancient/Peace.
+- Terrain transitions use a 128×256 RGBA atlas with four directions and nine
+  terrains. Only explored neighbours are blended, colors are sampled from the
+  facing edge of the neighbour tile, and UVs are inset half a texel.
+- Base terrain and transitions flush before resource/improvement details so
+  details stay crisp. Transition sampling is linear; base terrain stays
+  nearest-neighbor.
+- CJK title glyphs place 16×16 content in padded 18×18 cells. Gold headings
+  use shadow, top-left highlight, dark bevel, mid-gold, and body passes, then
+  restore nearest-neighbor font sampling.
+- V0.2.2/V0.3 tests and saves stay valid; `v0.2`, `v0.2.1`, `v0.2.2`, and
+  `v0.3` tags and packages are not moved.
+
+V0.2.2 decisions (historical):
 
 - Cities use separate HP and defense pools, both 100 base; Walls raise the
   defense cap to 150 and reduce worker repair to +15 instead of +25.
@@ -805,20 +954,23 @@ See `docs/DECISIONS.md` for the full history. Current V0.2.2 decisions:
 ## Tests
 
 - Build: pass — clean PSP EBOOT, no compiler warnings.
-- Assets: pass — V0.2.2 uses 512 strings, 564 Chinese glyphs, a 512×512 atlas,
-  8 SFX plus ambient; `tools/check_i18n.py` and `tools/check_audio.py` pass.
-  The V0.2 package remains at 498 strings and 561 glyphs.
+- Assets: pass — V0.3.1 uses 524 strings, 570 Chinese glyphs, a 512×512 CJK
+  atlas with padded 18×18 cells, a 256×256 terrain atlas, a 128×256 RGBA
+  transition atlas, 8 SFX, and 8 era/mood music loops (eight one-second chords
+  per loop). `tools/check_i18n.py` and `tools/check_audio.py` pass; stale
+  `ambient.wav` is rejected.
 - Host logic (`make test`): pass — 14 suites: map, units, city, tech,
   improvements, combat, turn-report queue, AI (including 200- and 320-turn
   simulations), diplomacy, analog, save, M7 scoring/science goals, M8
-  tech/effects/science/score, and i18n. V0.2 adds city
-  assault/defense-before-HP, garrison shielding, Walls/repair/HP recovery,
-  difficulty starts, denouncement, save-v3 round-trip, and v2 migration; V0.2.1
-  adds the centered AI/end-turn briefing; V0.2.2 hides fogged enemy units and
-  unexplored cities from the bottom status bar and tile info panel.
-- PPSSPP EBOOT functional smoke: pass for V0.2.2 boot; the prior V0.2.1 EBOOT
-  pass covered the turn briefing. The V0.2.2 fog-HUD visual behavior still
-  needs a hardware retest.
+  tech/effects/science/score, and i18n. V0.3.1 adds medic stats/attack
+  rejection/aura/non-stacking/friendly healing and forest-chop success,
+  rejection cases, and production credit. V0.3 adds auto-explore/reset/end-turn,
+  era/war detection, and an auto-explore save-bit round-trip; V0.2.2 hides
+  fogged enemy units and unexplored cities from the cursor HUD and tile panel.
+- PPSSPP EBOOT functional smoke: pass for V0.3.1 boot; the log reports
+  `CIVITAS PSP V0.3.1` and 8 era/mood music tracks. Medic/chop gameplay,
+  eight-chord audition, gold-title/transition visuals, and the V0.2.2 fog-HUD
+  visual checks still need hardware.
 - Historical PPSSPP validation: M4.1 worker/improvement, M5 rival/barbarian/
   combat/defeat, M6 diplomacy flow, M7 standard/timed save/load, M8 Help/
   30-tech Science/standard turn limit/score result, and M9 Chinese/English UI,
@@ -826,4 +978,5 @@ See `docs/DECISIONS.md` for the full history. Current V0.2.2 decisions:
   result. Those captures and logs belong to the earlier milestone builds.
 - PSP 1000: M0/M1/M1.1/M1.2, M2, M3, M4, M4.1, and M5 pass. M6 feature smoke
   passed but analog retest is pending; V0.2.1 was tested on hardware and exposed
-  the fog HUD leak. V0.2, M7, M8, M9, and the V0.2.2 retest remain pending.
+  the fog HUD leak. V0.2, M7, M8, M9, the V0.2.2 retest, and V0.3/V0.3.1
+  acceptance remain pending.
