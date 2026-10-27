@@ -9,6 +9,11 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 AUDIO_DIR = ROOT / "assets" / "src" / "audio"
 MIN_PEAK = 1000
+EXPECTED_MUSIC = {
+    f"music_{era}_{mood}.wav"
+    for era in ("ancient", "classical", "medieval", "renaissance")
+    for mood in ("peace", "war")
+}
 
 
 def main() -> None:
@@ -16,6 +21,12 @@ def main() -> None:
     if not files:
         raise SystemExit("no generated WAV files found")
     errors = []
+    names = {path.name for path in files}
+    missing_music = EXPECTED_MUSIC - names
+    if missing_music:
+        errors.append("missing music loops: " + ", ".join(sorted(missing_music)))
+    if "ambient.wav" in names:
+        errors.append("stale ambient.wav still present")
     for path in files:
         with wave.open(str(path), "rb") as wav:
             frames = wav.getnframes()

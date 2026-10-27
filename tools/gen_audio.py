@@ -164,52 +164,214 @@ def make_research() -> list[int]:
     return normalize(buf, TARGET_PEAK)
 
 
-def make_ambient() -> list[int]:
+CHORD_INTERVALS = {
+    "major": (0, 4, 7),
+    "minor": (0, 3, 7),
+    "major7": (0, 4, 7, 11),
+    "minor7": (0, 3, 7, 10),
+    "dom7": (0, 4, 7, 10),
+}
+
+
+def chord_intervals(quality: str) -> tuple[int, ...]:
+    return CHORD_INTERVALS.get(quality, CHORD_INTERVALS["major"])
+
+
+# Eight diatonic chords per loop (one per second) give each era a clearer
+# harmonic story and richer sevenths.  The arpeggio is the only melodic voice:
+# every lead note therefore lands on the same eighth/sixteenth-note grid as the
+# accompaniment instead of floating over it as a slower counter-melody.
+MUSIC_STYLES = (
+    {
+        "name": "ancient",
+        "root": 57,
+        "chords": (
+            (0, "minor"), (8, "major"), (3, "major"), (10, "major"),
+            (0, "minor"), (5, "minor"), (8, "major7"), (7, "minor"),
+        ),
+        "pad_wave": "sine",
+        "arp_wave": "triangle",
+        "arp_step": 0.50,
+        "pad_amp": 0.050,
+        "arp_amp": 0.065,
+    },
+    {
+        "name": "classical",
+        "root": 60,
+        "chords": (
+            (0, "major7"), (9, "minor"), (5, "major7"), (7, "dom7"),
+            (0, "major"), (5, "major"), (2, "minor7"), (7, "dom7"),
+        ),
+        "pad_wave": "triangle",
+        "arp_wave": "triangle",
+        "arp_step": 0.50,
+        "pad_amp": 0.045,
+        "arp_amp": 0.060,
+    },
+    {
+        "name": "medieval",
+        "root": 55,
+        "chords": (
+            (0, "minor"), (10, "major"), (8, "major"), (10, "major"),
+            (0, "minor"), (5, "minor"), (8, "major"), (7, "minor7"),
+        ),
+        "pad_wave": "sine",
+        "arp_wave": "square",
+        "arp_step": 0.50,
+        "pad_amp": 0.060,
+        "arp_amp": 0.045,
+    },
+    {
+        "name": "renaissance",
+        "root": 62,
+        "chords": (
+            (0, "major"), (7, "dom7"), (9, "minor7"), (4, "minor"),
+            (5, "major7"), (0, "major"), (2, "minor7"), (7, "dom7"),
+        ),
+        "pad_wave": "triangle",
+        "arp_wave": "saw",
+        "arp_step": 0.50,
+        "pad_amp": 0.040,
+        "arp_amp": 0.045,
+    },
+)
+
+MUSIC_TRACK_NAMES = (
+    "AUDIO_MUSIC_ANCIENT_PEACE",
+    "AUDIO_MUSIC_ANCIENT_WAR",
+    "AUDIO_MUSIC_CLASSICAL_PEACE",
+    "AUDIO_MUSIC_CLASSICAL_WAR",
+    "AUDIO_MUSIC_MEDIEVAL_PEACE",
+    "AUDIO_MUSIC_MEDIEVAL_WAR",
+    "AUDIO_MUSIC_RENAISSANCE_PEACE",
+    "AUDIO_MUSIC_RENAISSANCE_WAR",
+)
+
+
+def midi_freq(note: float) -> float:
+    return 440.0 * (2.0 ** ((note - 69.0) / 12.0))
+
+
+def loopify(samples: list[float], seconds: float = 0.22) -> list[float]:
+    """Crossfade the tail into the head and trim it for a seamless loop."""
+    fade = int(seconds * SAMPLE_RATE)
+    if fade < 2 or fade * 2 >= len(samples):
+        return samples
+    out = [0.0] * (len(samples) - fade)
+    for i in range(fade):
+        t = i / (fade - 1)
+        out[i] = samples[i] * t + samples[len(samples) - fade + i] * (1.0 - t)
+    out[fade:] = samples[fade:len(samples) - fade]
+    return out
+
+
+def add_war_drum(buf: list[float], start: int, amp: float,
+                 rng: random.Random, deep: bool) -> None:
+    add_note(buf, start, 0.22, 48.0 if deep else 62.0, amp, "sine",
+             attack=0.001, release=0.85)
+    add_note(buf, start, 0.07, 96.0, amp * 0.28, "triangle",
+             attack=0.001, release=0.90)
+    add_noise(buf, start, 0.055, amp * 0.34, rng,
+              attack=0.001, release=0.95)
+
+
+def make_music(style: dict, war: bool) -> list[int]:
     duration = 8.0
     count = int(duration * SAMPLE_RATE)
     buf = [0.0] * count
-    # Four calm two-second chords: Am, F, C, G.
-    chords = (
-        (110.0, 164.81, 220.0),
-        (87.31, 130.81, 174.61),
-        (130.81, 164.81, 196.0),
-        (98.0, 123.47, 146.83),
+    rng = random.Random(0xA0D10 + sum(ord(c) for c in style["name"])
+                        + (0x500 if war else 0))
+
+    transpose = -2 if war else 0
+    root = style["root"] + transpose
+    # (chord-tone index, octave).  Peace stays in the same mid register as the
+    # old lead; war raises every fourth arpeggio step (the seventh, or the root
+    # on a triad) and the final fifth an octave for bite without turning the
+    # whole loop into a high-register exercise.
+    high_octave = 24 if war else 12
+    arp_pattern = (
+        (0, 12), (1, 12), (2, 12), (3, high_octave),
+        (2, 12), (1, 12), (0, 12), (2, high_octave),
     )
-    for index, chord in enumerate(chords):
-        start = int(index * 2.0 * SAMPLE_RATE)
-        for freq in chord:
-            add_note(buf, start, 2.0, freq, 0.10, "sine",
-                     attack=0.25, release=0.25, detune=0.002)
-        # Gentle arpeggio over the pad.
-        for step, freq in enumerate((chord[2] * 2.0, chord[1] * 2.0,
-                                     chord[0] * 2.0)):
-            add_note(buf, start + int(step * 0.42 * SAMPLE_RATE), 0.55,
-                     freq, 0.07, "triangle",
-                     attack=0.03, release=0.6)
-    # A low sustained pulse that makes the loop feel less empty.
-    for beat in range(16):
-        start = int(beat * 0.5 * SAMPLE_RATE)
-        add_note(buf, start, 0.22, 55.0, 0.06, "sine",
-                 attack=0.02, release=0.8)
-    return normalize(buf, TARGET_PEAK)
+    arp_index = 0
+    chord_seconds = duration / float(len(style["chords"]))
+    arp_step = 0.25 if war else style["arp_step"]
+    pad_attack = min(0.22, chord_seconds * 0.20)
+    pad_release = min(0.22, chord_seconds * 0.24)
+
+    for chord_index, (semi, quality) in enumerate(style["chords"]):
+        start = int(chord_index * chord_seconds * SAMPLE_RATE)
+        base = root + semi
+        intervals = chord_intervals(quality)
+
+        # Sustained pad.  War variants drop the root an octave for weight.
+        pad_base = base - (12 if war else 0)
+        add_note(buf, start, chord_seconds, midi_freq(pad_base - 12),
+                 style["pad_amp"] * (1.15 if war else 1.0),
+                 "sine", attack=pad_attack, release=pad_release,
+                 detune=0.002)
+        for interval in intervals:
+            add_note(buf, start, chord_seconds,
+                     midi_freq(pad_base + interval),
+                     style["pad_amp"], style["pad_wave"],
+                     attack=pad_attack, release=pad_release, detune=0.003)
+
+        # Bass pulse.
+        pulse_step = 0.5 if war else 1.0
+        pulse_count = int(chord_seconds / pulse_step)
+        bass_len = 0.30 if war else min(0.85, chord_seconds * 0.8)
+        for pulse in range(pulse_count):
+            add_note(buf, start + int(pulse * pulse_step * SAMPLE_RATE),
+                     bass_len,
+                     midi_freq(base - 24),
+                     (0.12 if war else 0.055),
+                     "triangle", attack=0.01, release=0.75)
+
+        # Era-specific arpeggio.  War doubles the note density.  The pattern
+        # runs across chord boundaries so peace uses all eight contour steps
+        # instead of restarting on the same root/third pair for every chord.
+        arp_count = int(chord_seconds / arp_step)
+        for step in range(arp_count):
+            pattern_index, octave = arp_pattern[arp_index % len(arp_pattern)]
+            arp_index += 1
+            interval = intervals[pattern_index % len(intervals)]
+            freq = midi_freq(base + interval + octave)
+            add_note(buf, start + int(step * arp_step * SAMPLE_RATE),
+                     arp_step * (1.25 if war else 1.55), freq,
+                     style["arp_amp"] * (0.85 if war else 1.0),
+                     style["arp_wave"], attack=0.012, release=0.58)
+
+        # War adds a low, insistent drum and snare pattern.
+        if war:
+            for beat in range(int(chord_seconds / 0.5)):
+                drum_start = start + int(beat * 0.5 * SAMPLE_RATE)
+                if beat % 2 == 0:
+                    add_war_drum(buf, drum_start, 0.23, rng, deep=True)
+                if beat % 4 == 2:
+                    add_war_drum(buf, drum_start, 0.12, rng, deep=False)
+
+    # War gets a sustained low root drone.  There is deliberately no separate
+    # long-note lead here: the arpeggio owns the melody, so every attack in the
+    # loop shares the same rhythmic subdivision.
+    if war:
+        add_note(buf, 0, duration, midi_freq(root - 24), 0.045,
+                 "sine", attack=0.4, release=0.4, detune=0.002)
+
+    return normalize(loopify(buf), TARGET_PEAK)
 
 
 def write_header(clips: list[tuple[str, str, list[int]]],
-                 ambient: list[int]) -> None:
+                 music: list[tuple[str, str, list[int]]]) -> None:
     lines = [
         "/* Generated by tools/gen_audio.py. Do not edit by hand. */",
         "#ifndef AUDIO_GEN_H",
         "#define AUDIO_GEN_H",
         "",
         f"#define AUDIO_SAMPLE_RATE {SAMPLE_RATE}",
-        f"#define AUDIO_AMBIENT_SAMPLES {len(ambient)}",
-        "static const short audio_ambient[AUDIO_AMBIENT_SAMPLES]"
-        " __attribute__((aligned(16))) = {",
+        f"#define AUDIO_MUSIC_GENERATED_COUNT {len(music)}",
+        "",
     ]
-    for start in range(0, len(ambient), 16):
-        lines.append("    " + ", ".join(str(x) for x in ambient[start:start + 16]) + ",")
-    lines += ["};", ""]
-    for name, macro, samples in clips:
+    for name, macro, samples in list(clips) + list(music):
         lines.append(f"#define {macro} {len(samples)}")
         lines.append(f"static const short audio_{name}[{macro}]"
                      " __attribute__((aligned(16))) = {")
@@ -232,18 +394,35 @@ def main() -> None:
         ("sfx_combat", "AUDIO_SFX_COMBAT_SAMPLES", make_combat()),
         ("sfx_research", "AUDIO_SFX_RESEARCH_SAMPLES", make_research()),
     ]
-    ambient = make_ambient()
+
+    music = []
+    macro_index = 0
+    for style in MUSIC_STYLES:
+        for war in (False, True):
+            mood = "war" if war else "peace"
+            name = f"music_{style['name']}_{mood}"
+            macro = MUSIC_TRACK_NAMES[macro_index] + "_SAMPLES"
+            samples = make_music(style, war)
+            music.append((name, macro, samples))
+            write_wav(name, samples)
+            macro_index += 1
+
     for name, _macro, samples in clips:
         peak = max((abs(x) for x in samples), default=0)
         if peak < 1000:
             raise SystemExit(f"{name}: generated silent PCM")
         write_wav(name, samples)
-    if max((abs(x) for x in ambient), default=0) < 1000:
-        raise SystemExit("ambient: generated silent PCM")
-    write_wav("ambient", ambient)
-    write_header(clips, ambient)
+    for name, _macro, samples in music:
+        peak = max((abs(x) for x in samples), default=0)
+        if peak < 1000:
+            raise SystemExit(f"{name}: generated silent PCM")
+
+    stale_ambient = SRC_DIR / "ambient.wav"
+    if stale_ambient.exists():
+        stale_ambient.unlink()
+    write_header(clips, music)
     print(f"generated {OUT_PATH.relative_to(ROOT)} and WAV previews "
-          f"({len(ambient) / SAMPLE_RATE:.1f}s ambient, {len(clips)} SFX)")
+          f"({len(clips)} SFX, {len(music)} era/mood music loops)")
 
 
 if __name__ == "__main__":

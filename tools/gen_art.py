@@ -16,7 +16,9 @@ MONO = "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf"
 CJK = "/usr/share/fonts/opentype/noto/NotoSansCJK-Medium.ttc"
 
 TERRAIN_TILE = 24
-TERRAIN_ATLAS_W = 128
+# Six unit/city icons fit in each 256px row; the atlas stays power-of-two for
+# the PSP GU texture upload.
+TERRAIN_ATLAS_W = 256
 # Rows: 0-2 terrain, 3 resources, 4-8 one unit/city palette per civilization.
 TERRAIN_ATLAS_H = 256
 UNIT_OWNER_ROWS = 5
@@ -40,7 +42,49 @@ TERRAIN_NAMES = [
     "ocean",
 ]
 RESOURCE_NAMES = ["horses", "iron", "stone", "gems"]
-UNIT_NAMES = ["settler", "warrior", "scout", "city", "worker"]
+UNIT_NAMES = ["settler", "warrior", "scout", "city", "worker", "medic"]
+
+# RGBA overlays for soft terrain boundaries.  Columns are left/right/up/down,
+# rows follow TERRAIN_NAMES.  The renderer tints nothing: each tile already
+# carries the neighbouring terrain's base colour and an alpha ramp.
+TRANSITION_TILE = 24
+TRANSITION_DIRS = ("left", "right", "up", "down")
+TRANSITION_ATLAS_W = 128
+TRANSITION_ATLAS_H = 256
+TERRAIN_ATLAS_COLS = 3
+
+
+def terrain_edge_color(atlas: Image.Image, terrain_index: int,
+                       direction: str, edge: int = 4) -> tuple[int, int, int]:
+    """Average the neighbour-tile edge that touches the current tile.
+
+    The transition atlas stores the *neighbour's* terrain.  For a neighbour on
+    the left, its right edge is the one shared with the current tile, and so
+    on.  Matching that edge keeps blends from looking brighter or darker than
+    the actual tile on the other side.
+    """
+    x0 = (terrain_index % TERRAIN_ATLAS_COLS) * TERRAIN_TILE
+    y0 = (terrain_index // TERRAIN_ATLAS_COLS) * TERRAIN_TILE
+    if direction == "left":
+        box = (x0 + TERRAIN_TILE - edge, y0,
+               x0 + TERRAIN_TILE, y0 + TERRAIN_TILE)
+    elif direction == "right":
+        box = (x0, y0, x0 + edge, y0 + TERRAIN_TILE)
+    elif direction == "up":
+        box = (x0, y0 + TERRAIN_TILE - edge,
+               x0 + TERRAIN_TILE, y0 + TERRAIN_TILE)
+    else:
+        box = (x0, y0, x0 + TERRAIN_TILE, y0 + edge)
+    region = atlas.crop(box)
+    pixels = [
+        region.getpixel((x, y))
+        for y in range(region.height)
+        for x in range(region.width)
+    ]
+    return tuple(
+        sum(pixel[channel] for pixel in pixels) // len(pixels)
+        for channel in range(3)
+    )
 
 
 def font(path: str, size: int) -> ImageFont.FreeTypeFont:
@@ -190,9 +234,9 @@ def generate_pic1() -> None:
     draw.line([164, 180, w - 164, 180], fill=(216, 178, 92, 150), width=1)
     draw.text((w // 2, 198), "探索 · 建设 · 外交", font=tag_font,
               fill=(210, 218, 206, 230), anchor="mm")
-    draw.text((30, h - 28), "V0.2.2 DEV", font=small_font,
+    draw.text((30, h - 28), "V0.3.1 DEV", font=small_font,
               fill=(174, 190, 180, 180), anchor="ls")
-    draw.text((w - 30, h - 28), "V0.2.2 BUILD", font=small_font,
+    draw.text((w - 30, h - 28), "V0.3.1 BUILD", font=small_font,
               fill=(174, 190, 180, 180), anchor="rs")
 
     img.save(SRC_DIR / "pic1.png")
@@ -220,7 +264,6 @@ def draw_terrain_tile(
     terrain: str,
     rng: random.Random,
 ) -> None:
-    border = (38, 54, 49, 255)
     if terrain == "grassland":
         draw.rectangle([x0, y0, x0 + 23, y0 + 23], fill=(82, 128, 71, 255))
         speckle(draw, x0, y0, rng, [(91, 141, 77, 255), (69, 112, 63, 255), (108, 153, 82, 255)], 34)
@@ -312,8 +355,8 @@ def draw_terrain_tile(
             draw.arc([x0 + 11, y0 + row - 2, x0 + 23, y0 + row + 4], 200, 340, fill=(91, 149, 172, 255))
     else:
         raise ValueError(f"unknown terrain {terrain}")
-
-    draw.rectangle([x0, y0, x0 + 23, y0 + 23], outline=border)
+    # No hard tile outline: explored-neighbour transition overlays already
+    # soften terrain changes, while a dark border made the map look gridded.
 
 
 def draw_resource_icon(
@@ -463,8 +506,97 @@ def draw_unit_icon(
         draw.arc([x0 + 12, y0 + 2, x0 + 22, y0 + 10], 180, 360, fill=(190, 196, 202, 255), width=2)
         draw.line([x0 + 9, y0 + 18, x0 + 8, y0 + 21], fill=outline)
         draw.line([x0 + 14, y0 + 18, x0 + 15, y0 + 21], fill=outline)
+    elif unit == "medic":
+        # Ivory tunic, team-color shoulders, and a red cross satchel make the
+        # non-combat support role readable at 24x24.
+        draw.rectangle([x0 + 7, y0 + 10, x0 + 16, y0 + 18],
+                       fill=(226, 230, 223, 255), outline=outline)
+        draw.rectangle([x0 + 7, y0 + 10, x0 + 9, y0 + 14],
+                       fill=accent, outline=outline)
+        draw.rectangle([x0 + 14, y0 + 10, x0 + 16, y0 + 14],
+                       fill=accent, outline=outline)
+        draw.ellipse([x0 + 9, y0 + 4, x0 + 15, y0 + 10],
+                     fill=(207, 170, 122, 255), outline=outline)
+        draw.pieslice([x0 + 8, y0 + 3, x0 + 16, y0 + 10], 180, 360,
+                      fill=(231, 235, 228, 255), outline=outline)
+        draw.rectangle([x0 + 11, y0 + 5, x0 + 12, y0 + 7],
+                       fill=(190, 58, 54, 255))
+        draw.rectangle([x0 + 10, y0 + 6, x0 + 13, y0 + 7],
+                       fill=(190, 58, 54, 255))
+        draw.rectangle([x0 + 11, y0 + 11, x0 + 12, y0 + 17],
+                       fill=(190, 58, 54, 255))
+        draw.rectangle([x0 + 9, y0 + 13, x0 + 14, y0 + 14],
+                       fill=(190, 58, 54, 255))
+        draw.rectangle([x0 + 16, y0 + 12, x0 + 20, y0 + 17],
+                       fill=(236, 232, 220, 255), outline=outline)
+        draw.rectangle([x0 + 18, y0 + 12, x0 + 19, y0 + 17],
+                       fill=(190, 58, 54, 255))
+        draw.rectangle([x0 + 17, y0 + 14, x0 + 20, y0 + 15],
+                       fill=(190, 58, 54, 255))
+        draw.line([x0 + 9, y0 + 18, x0 + 8, y0 + 21], fill=outline)
+        draw.line([x0 + 14, y0 + 18, x0 + 15, y0 + 21], fill=outline)
     else:
         raise ValueError(f"unknown unit {unit}")
+
+
+def smoothstep(value: float) -> float:
+    value = max(0.0, min(1.0, value))
+    return value * value * (3.0 - 2.0 * value)
+
+
+def generate_transition_atlas() -> None:
+    terrain_atlas = Image.open(SRC_DIR / "terrain_atlas.png").convert("RGBA")
+    img = Image.new("RGBA", (TRANSITION_ATLAS_W, TRANSITION_ATLAS_H),
+                    (0, 0, 0, 0))
+    fade_px = 12.0
+
+    for terrain_index in range(len(TERRAIN_NAMES)):
+        for direction_index, direction in enumerate(TRANSITION_DIRS):
+            base = terrain_edge_color(terrain_atlas, terrain_index, direction)
+            rng = random.Random(0x7E44A00 + terrain_index * 17
+                                + direction_index)
+            x0 = direction_index * TRANSITION_TILE
+            y0 = terrain_index * TRANSITION_TILE
+            for y in range(TRANSITION_TILE):
+                for x in range(TRANSITION_TILE):
+                    if direction == "left":
+                        distance = x
+                    elif direction == "right":
+                        distance = TRANSITION_TILE - 1 - x
+                    elif direction == "up":
+                        distance = y
+                    else:
+                        distance = TRANSITION_TILE - 1 - y
+                    if distance >= fade_px:
+                        continue
+                    ramp = smoothstep(1.0 - distance / fade_px)
+                    alpha = int(150.0 * ramp
+                                * (0.78 + 0.22 * rng.random()))
+                    if alpha <= 0:
+                        continue
+                    jitter = rng.randint(-9, 9)
+                    color = tuple(
+                        max(0, min(255, channel + jitter))
+                        for channel in base
+                    )
+                    img.putpixel((x0 + x, y0 + y), (*color, alpha))
+
+    SRC_DIR.mkdir(parents=True, exist_ok=True)
+    GEN_DIR.mkdir(parents=True, exist_ok=True)
+    img.save(SRC_DIR / "transition_atlas.png")
+    meta = {
+        "atlas_w": TRANSITION_ATLAS_W,
+        "atlas_h": TRANSITION_ATLAS_H,
+        "tile_w": TRANSITION_TILE,
+        "tile_h": TRANSITION_TILE,
+        "cols": len(TRANSITION_DIRS),
+        "rows": len(TERRAIN_NAMES),
+        "directions": list(TRANSITION_DIRS),
+        "terrain": TERRAIN_NAMES,
+    }
+    (GEN_DIR / "transition_atlas.json").write_text(
+        json.dumps(meta, indent=2) + "\n", encoding="utf-8"
+    )
 
 
 def generate_terrain_atlas() -> None:
@@ -513,7 +645,9 @@ def main() -> None:
     generate_icon()
     generate_pic1()
     generate_terrain_atlas()
-    print("generated ICON0.PNG, PIC1.PNG, and terrain_atlas.png (terrain/resource/unit icons)")
+    generate_transition_atlas()
+    print("generated ICON0.PNG, PIC1.PNG, terrain_atlas.png, and "
+          "transition_atlas.png (terrain/resource/unit icons and soft edges)")
 
 
 if __name__ == "__main__":

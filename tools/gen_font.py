@@ -2,9 +2,10 @@
 """Generate the English and Chinese bitmap font atlases.
 
 English keeps the original fixed 8x14 monospace cells.  Chinese uses 16x16
-cells with an 8px ASCII advance for digits/Latin and a 16px advance for CJK
-characters.  Only characters used by the string table (plus printable ASCII)
-are packed, keeping the atlas small enough for the PSP.
+glyph areas inside padded 18x18 cells, with an 8px ASCII advance for
+digits/Latin and a 16px advance for CJK characters.  Only characters used by
+the string table (plus printable ASCII) are packed, keeping the atlas small
+enough for the PSP.
 """
 from __future__ import annotations
 
@@ -31,10 +32,14 @@ FIRST = 32
 LAST = 126
 FONT_SIZE = 11
 
-# Chinese atlas.
-ZH_CELL = 16
-ZH_COLS = 32
-ZH_ATLAS_W = ZH_CELL * ZH_COLS
+# Chinese atlas.  Each 16x16 glyph sits inside an 18x18 cell with a one-pixel
+# transparent gutter.  The gutter keeps linear filtering from bleeding a
+# neighbouring glyph into large gold-stamped menu headings; advances and quad
+# sizes still use the 16px glyph area.
+ZH_CELL = 18
+ZH_GLYPH = 16
+ZH_ATLAS_W = 512
+ZH_COLS = ZH_ATLAS_W // ZH_CELL
 ZH_ASCII_SIZE = 11
 ZH_CJK_SIZE = 14
 
@@ -155,11 +160,13 @@ def generate_zh(latin_font_path: Path, cjk_font_path: Path,
     for idx, cp in enumerate(codepoints):
         col = idx % ZH_COLS
         row = idx // ZH_COLS
-        x = col * ZH_CELL
-        y = row * ZH_CELL
+        cell_x = col * ZH_CELL
+        cell_y = row * ZH_CELL
+        x = cell_x + 1
+        y = cell_y + 1
         ch = chr(cp)
-        advance = 8 if cp < 128 else ZH_CELL
-        width = 8 if cp < 128 else ZH_CELL
+        advance = 8 if cp < 128 else ZH_GLYPH
+        width = 8 if cp < 128 else ZH_GLYPH
         if ch != " ":
             if cp < 128:
                 bbox = draw.textbbox((0, 0), ch, font=latin_font, anchor="ls")
@@ -170,7 +177,7 @@ def generate_zh(latin_font_path: Path, cjk_font_path: Path,
             else:
                 bbox = draw.textbbox((0, 0), ch, font=cjk_font, anchor="ls")
                 glyph_w = bbox[2] - bbox[0]
-                dx = x + (ZH_CELL - glyph_w) / 2 - bbox[0]
+                dx = x + (ZH_GLYPH - glyph_w) / 2 - bbox[0]
                 draw.text((dx, y + 13), ch, font=cjk_font,
                           fill=(255, 255, 255, 255), anchor="ls")
         glyphs.append({
@@ -189,8 +196,8 @@ def generate_zh(latin_font_path: Path, cjk_font_path: Path,
     meta = {
         "atlas_w": ZH_ATLAS_W,
         "atlas_h": atlas_h,
-        "cell_w": ZH_CELL,
-        "cell_h": ZH_CELL,
+        "cell_w": ZH_GLYPH,
+        "cell_h": ZH_GLYPH,
         "cols": ZH_COLS,
         "rows": atlas_h // ZH_CELL,
         "glyph_count": len(glyphs),
