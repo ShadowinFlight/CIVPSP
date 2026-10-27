@@ -19,6 +19,8 @@
 #define AUDIO_MUSIC_GAIN 100
 #define AUDIO_MUSIC_DUCK_GAIN 20
 #define AUDIO_SFX_GAIN 100
+/* 0.4s at the generated 22050Hz source rate. */
+#define AUDIO_MUSIC_FADE_SAMPLES 8820
 
 typedef struct {
     const short *data;
@@ -36,6 +38,29 @@ static const AudioClip sfx_clips[AUDIO_SFX_COUNT] = {
     [AUDIO_SFX_RESEARCH] = { audio_sfx_research, AUDIO_SFX_RESEARCH_SAMPLES },
 };
 
+static const AudioClip music_clips[AUDIO_MUSIC_COUNT] = {
+    [AUDIO_MUSIC_ANCIENT_PEACE] =
+        { audio_music_ancient_peace, AUDIO_MUSIC_ANCIENT_PEACE_SAMPLES },
+    [AUDIO_MUSIC_ANCIENT_WAR] =
+        { audio_music_ancient_war, AUDIO_MUSIC_ANCIENT_WAR_SAMPLES },
+    [AUDIO_MUSIC_CLASSICAL_PEACE] =
+        { audio_music_classical_peace, AUDIO_MUSIC_CLASSICAL_PEACE_SAMPLES },
+    [AUDIO_MUSIC_CLASSICAL_WAR] =
+        { audio_music_classical_war, AUDIO_MUSIC_CLASSICAL_WAR_SAMPLES },
+    [AUDIO_MUSIC_MEDIEVAL_PEACE] =
+        { audio_music_medieval_peace, AUDIO_MUSIC_MEDIEVAL_PEACE_SAMPLES },
+    [AUDIO_MUSIC_MEDIEVAL_WAR] =
+        { audio_music_medieval_war, AUDIO_MUSIC_MEDIEVAL_WAR_SAMPLES },
+    [AUDIO_MUSIC_RENAISSANCE_PEACE] =
+        { audio_music_renaissance_peace,
+          AUDIO_MUSIC_RENAISSANCE_PEACE_SAMPLES },
+    [AUDIO_MUSIC_RENAISSANCE_WAR] =
+        { audio_music_renaissance_war, AUDIO_MUSIC_RENAISSANCE_WAR_SAMPLES },
+};
+
+_Static_assert(AUDIO_MUSIC_COUNT == AUDIO_MUSIC_GENERATED_COUNT,
+               "audio.h and audio_gen.h music track counts differ");
+
 static short mix_buffer[AUDIO_OUTPUT_SAMPLES * 2]
     __attribute__((aligned(64)));
 
@@ -45,12 +70,18 @@ static volatile int audio_available;
 static volatile int audio_stop;
 static volatile int music_enabled = 1;
 static volatile int pending_sfx = -1;
+static volatile int pending_music = -1;
+static volatile int selected_music = AUDIO_MUSIC_ANCIENT_PEACE;
 
 static int audio_thread(SceSize args, void *argp) {
     (void)args;
     (void)argp;
 
+    int active_music = AUDIO_MUSIC_ANCIENT_PEACE;
     int music_pos = 0;
+    int fade_from = -1;
+    int fade_from_pos = 0;
+    int fade_pos = AUDIO_MUSIC_FADE_SAMPLES;
     int active_sfx = -1;
     int sfx_pos = 0;
     int output_error_logged = 0;
@@ -65,15 +96,45 @@ static int audio_thread(SceSize args, void *argp) {
             }
         }
 
+        int requested_music = pending_music;
+        if (requested_music >= 0) {
+            pending_music = -1;
+            if (requested_music < AUDIO_MUSIC_COUNT
+                && requested_music != active_music) {
+                fade_from = active_music;
+                fade_from_pos = music_pos;
+                active_music = requested_music;
+                music_pos = 0;
+                fade_pos = 0;
+            }
+        }
+
         /* Two output frames per generated source frame (22050 -> 44100). */
         for (int i = 0; i < AUDIO_OUTPUT_SAMPLES; i += 2) {
             int32_t sample = 0;
+            const AudioClip *music = &music_clips[active_music];
+            int32_t music_sample = music->data[music_pos];
+
+            /* Equal-power would be nicer, but a linear fade over 0.4s is
+             * inaudible at these levels and keeps the mixer integer-only. */
+            if (fade_from >= 0 && fade_pos < AUDIO_MUSIC_FADE_SAMPLES) {
+                const AudioClip *old = &music_clips[fade_from];
+                int32_t old_sample = old->data[fade_from_pos];
+                music_sample =
+                    (old_sample * (AUDIO_MUSIC_FADE_SAMPLES - fade_pos)
+                     + music_sample * fade_pos)
+                    / AUDIO_MUSIC_FADE_SAMPLES;
+                fade_from_pos++;
+                if (fade_from_pos >= old->length) fade_from_pos = 0;
+                fade_pos++;
+                if (fade_pos >= AUDIO_MUSIC_FADE_SAMPLES) fade_from = -1;
+            }
+
             if (music_enabled) {
                 int music_gain = active_sfx >= 0
                                      ? AUDIO_MUSIC_DUCK_GAIN
                                      : AUDIO_MUSIC_GAIN;
-                sample += (int32_t)audio_ambient[music_pos]
-                          * music_gain / 100;
+                sample += music_sample * music_gain / 100;
             }
             if (active_sfx >= 0) {
                 const AudioClip *clip = &sfx_clips[active_sfx];
@@ -93,7 +154,7 @@ static int audio_thread(SceSize args, void *argp) {
             mix_buffer[(i + 1) * 2] = (short)sample;
             mix_buffer[(i + 1) * 2 + 1] = (short)sample;
             music_pos++;
-            if (music_pos >= AUDIO_AMBIENT_SAMPLES) {
+            if (music_pos >= music->length) {
                 music_pos = 0;
             }
         }
@@ -117,6 +178,8 @@ void Audio_Init(void) {
     audio_available = 0;
     audio_stop = 0;
     pending_sfx = -1;
+    pending_music = -1;
+    selected_music = AUDIO_MUSIC_ANCIENT_PEACE;
 
     audio_channel = sceAudioChReserve(PSP_AUDIO_NEXT_CHANNEL,
                                       AUDIO_OUTPUT_SAMPLES,
@@ -145,8 +208,8 @@ void Audio_Init(void) {
     }
 
     audio_available = 1;
-    Log_Printf("audio: channel=%d %dHz stereo, ambient %d source samples",
-               audio_channel, AUDIO_OUTPUT_RATE, AUDIO_AMBIENT_SAMPLES);
+    Log_Printf("audio: channel=%d %dHz stereo, %d era/mood music tracks",
+               audio_channel, AUDIO_OUTPUT_RATE, AUDIO_MUSIC_COUNT);
 }
 
 void Audio_Shutdown(void) {
@@ -171,6 +234,13 @@ void Audio_Shutdown(void) {
 void Audio_PlaySfx(AudioSfx sfx) {
     if (!audio_available || sfx < 0 || sfx >= AUDIO_SFX_COUNT) return;
     pending_sfx = (int)sfx;
+}
+
+void Audio_SetMusicTrack(AudioMusic track) {
+    if (track < 0 || track >= AUDIO_MUSIC_COUNT) return;
+    if (selected_music == (int)track) return;
+    selected_music = (int)track;
+    pending_music = (int)track;
 }
 
 void Audio_SetMusicEnabled(int enabled) {

@@ -118,6 +118,11 @@ void World_BeginWithDifficulty(World *world, Map *map, int difficulty);
 void World_UpdateVision(World *world, Map *map);
 void World_EndTurn(World *world, Map *map);
 
+/* V0.3 scout automation.  Auto-explore is stored in the high bit of
+ * Unit.acted, so it survives saves without changing the save layout. */
+int World_AutoExploreScout(World *world, Map *map, int unit_index);
+void World_AutoExploreScouts(World *world, Map *map);
+
 /* M5 civilizations, war, and empire helpers. */
 StrId World_CivNameId(int owner);
 unsigned int World_CivColor(int owner);
@@ -130,6 +135,10 @@ int World_MilitaryCount(const World *world, int owner);
 int World_PlayerCityCount(const World *world);
 int World_PlayerPopulation(const World *world);
 int World_PlayerTechCount(const World *world);
+/* V0.3 music mood helpers: highest researched era and war with a living major
+ * rival (barbarians are excluded because they are permanently hostile). */
+int World_PlayerEra(const World *world);
+int World_PlayerAtWar(const World *world);
 int World_CivTechCount(const World *world, int owner);
 uint32_t World_CivResearched(const World *world, int owner);
 int World_AllTechsResearched(const World *world);

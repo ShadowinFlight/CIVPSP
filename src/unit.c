@@ -9,6 +9,7 @@ const UnitDef g_unit_defs[UNIT_TYPE_COUNT] = {
     [UNIT_SWORDSMAN] = { 5, 2, 8, 0 },
     [UNIT_HORSEMAN]  = { 10, 2, 4, 0 },
     [UNIT_WORKER]    = { 4, 2, 0, 0 },
+    [UNIT_MEDIC]     = { 4, 2, 0, 0 },
 };
 
 /* Dijkstra scratch space.  The game is single-threaded and the search budget
@@ -363,12 +364,26 @@ int Unit_PathNextStep(const UnitPool *pool, const Map *map, int unit_index,
     return 1;
 }
 
+int Unit_AutoExploreEnabled(const Unit *unit) {
+    return unit && (unit->acted & UNIT_AUTO_EXPLORE_FLAG) != 0;
+}
+
+void Unit_SetAutoExplore(Unit *unit, int enabled) {
+    if (!unit) return;
+    if (enabled) {
+        unit->acted |= UNIT_AUTO_EXPLORE_FLAG;
+    } else {
+        unit->acted &= (uint8_t)~UNIT_AUTO_EXPLORE_FLAG;
+    }
+}
+
 void Unit_ResetTurn(UnitPool *pool) {
     if (!pool) return;
     for (int i = 0; i < pool->count; i++) {
         int type = pool->units[i].type;
+        uint8_t auto_explore = pool->units[i].acted & UNIT_AUTO_EXPLORE_FLAG;
         pool->units[i].moves_left = (uint8_t)Unit_TypeMovePoints(type);
-        pool->units[i].acted = 0;
+        pool->units[i].acted = auto_explore;
     }
 }
 

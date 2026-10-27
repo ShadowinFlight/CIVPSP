@@ -40,6 +40,7 @@ typedef enum {
     PROD_SWORDSMAN,
     PROD_HORSEMAN,
     PROD_WORKER,
+    PROD_MEDIC,
     PROD_COUNT
 } ProductionType;
 

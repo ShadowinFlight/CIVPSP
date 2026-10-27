@@ -443,6 +443,16 @@ static const ProductionDef *queue_front(const City *city) {
     return Data_ProductionDef((ProductionType)city->queue[0]);
 }
 
+int City_AddProduction(City *city, int amount) {
+    if (!city || amount <= 0) return 0;
+    int before = city->production_stored;
+    int next = before + amount;
+    if (next > CITY_STORE_MAX) next = CITY_STORE_MAX;
+    if (next < before) next = before;
+    city->production_stored = (int16_t)next;
+    return next - before;
+}
+
 int City_ProductionRemaining(const City *city) {
     const ProductionDef *def = queue_front(city);
     if (!def) return -1;

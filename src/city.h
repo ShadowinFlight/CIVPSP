@@ -170,6 +170,9 @@ int City_ToggleLock(City *city, const Map *map, int index);
 CityQueueResult City_QueueAdd(City *city, ProductionType type);
 int City_QueueRemoveLast(City *city);
 int City_QueueContains(const City *city, ProductionType type);
+/* Add a one-off production bonus (for example a forest chop).  The city's
+ * normal end-turn processing decides when the queued item completes. */
+int City_AddProduction(City *city, int amount);
 int City_ProductionRemaining(const City *city);
 int City_TurnsLeft(const City *city, const Map *map);
 int City_TurnsLeftWithTech(const City *city, const Map *map,

@@ -12,6 +12,7 @@
 #include "game.h"
 #include "gen/strings_gen.h"
 #include "gen/terrain_gen.h"
+#include "gen/transition_gen.h"
 #include "improvement.h"
 #include "input.h"
 #include "log.h"
@@ -60,6 +61,7 @@ static StrId unit_str(int type) {
         case UNIT_SWORDSMAN: return S_UNIT_SWORDSMAN;
         case UNIT_HORSEMAN:  return S_UNIT_HORSEMAN;
         case UNIT_WORKER:    return S_UNIT_WORKER;
+        case UNIT_MEDIC:     return S_UNIT_MEDIC;
         default:           return S_UNIT_WARRIOR;
     }
 }
@@ -276,14 +278,19 @@ static int repair_city_for(const World *world, const Map *map,
 enum {
     MENU_FOUND = 0,
     MENU_REPAIR,
+    MENU_CHOP,
     MENU_BUILD,
+    MENU_AUTO_EXPLORE,
     MENU_GARRISON,
     MENU_WAIT,
     MENU_CANCEL
 };
 
+#define ACTION_MENU_MAX 6
+
 static int menu_actions(const World *world, const Map *map, const Unit *unit,
-                        int actions[4], StrId labels[4]) {
+                        int actions[ACTION_MENU_MAX],
+                        StrId labels[ACTION_MENU_MAX]) {
     if (unit->type == UNIT_SETTLER) {
         actions[0] = MENU_FOUND; labels[0] = S_ACTION_FOUND;
         actions[1] = MENU_WAIT;  labels[1] = S_ACTION_WAIT;
@@ -295,22 +302,32 @@ static int menu_actions(const World *world, const Map *map, const Unit *unit,
         if (repair_city_for(world, map, unit) >= 0) {
             actions[n] = MENU_REPAIR; labels[n++] = S_ACTION_REPAIR;
         }
+        /* Keep the chop entry visible on a valid owned forest even before a
+         * queue exists, so the action can explain the missing prerequisite.
+         * The actual operation still performs the full eligibility check. */
+        int chop = Improvement_CanChopForest(map, &world->cities, unit);
+        if (chop == IMPROVEMENT_OK || chop == IMPROVEMENT_ERR_NO_QUEUE) {
+            actions[n] = MENU_CHOP; labels[n++] = S_ACTION_CHOP_FOREST;
+        }
         actions[n] = MENU_BUILD; labels[n++] = S_ACTION_BUILD;
         actions[n] = MENU_WAIT; labels[n++] = S_ACTION_WAIT;
         actions[n] = MENU_CANCEL; labels[n++] = S_ACTION_CANCEL;
         return n;
     }
-    if (garrison_city_for(world, map, unit) >= 0) {
-        actions[0] = MENU_GARRISON; labels[0] = S_ACTION_GARRISON;
-        actions[1] = MENU_WAIT; labels[1] = S_ACTION_WAIT;
-        actions[2] = MENU_CANCEL; labels[2] = S_ACTION_CANCEL;
-        return 3;
+
+    int n = 0;
+    if (unit->type == UNIT_SCOUT) {
+        actions[n] = MENU_AUTO_EXPLORE;
+        labels[n++] = Unit_AutoExploreEnabled(unit)
+                          ? S_ACTION_AUTO_EXPLORE_OFF
+                          : S_ACTION_AUTO_EXPLORE_ON;
     }
-    actions[0] = MENU_WAIT;
-    labels[0] = S_ACTION_WAIT;
-    actions[1] = MENU_CANCEL;
-    labels[1] = S_ACTION_CANCEL;
-    return 2;
+    if (garrison_city_for(world, map, unit) >= 0) {
+        actions[n] = MENU_GARRISON; labels[n++] = S_ACTION_GARRISON;
+    }
+    actions[n] = MENU_WAIT; labels[n++] = S_ACTION_WAIT;
+    actions[n] = MENU_CANCEL; labels[n++] = S_ACTION_CANCEL;
+    return n;
 }
 
 static StrId improvement_error_str(int result) {
@@ -320,6 +337,8 @@ static StrId improvement_error_str(int result) {
         case IMPROVEMENT_ERR_ALREADY:     return S_MSG_ALREADY_IMPROVED;
         case IMPROVEMENT_ERR_NO_MOVES:    return S_MSG_NO_MOVES;
         case IMPROVEMENT_ERR_NOT_WORKER:  return S_MSG_SELECT_UNIT;
+        case IMPROVEMENT_ERR_NO_FOREST:   return S_MSG_CHOP_NONE;
+        case IMPROVEMENT_ERR_NO_QUEUE:    return S_MSG_CHOP_NO_QUEUE;
         default:                          return S_MSG_CANNOT_BUILD;
     }
 }
@@ -370,7 +389,7 @@ static void update_build_menu(MapView *view, World *world, Map *map) {
 static StrId combat_error_str(int result) {
     switch (result) {
         case COMBAT_ERR_NO_MOVES: return S_MSG_NO_MOVES;
-        case COMBAT_ERR_CIVILIAN: return S_MSG_SELECT_UNIT;
+        case COMBAT_ERR_CIVILIAN: return S_MSG_CIVILIAN_CANNOT_ATTACK;
         case COMBAT_ERR_FRIENDLY: return S_MSG_ATTACK_FAILED;
         case COMBAT_ERR_DEFENDED: return S_MSG_CITY_DEFENDED;
         case COMBAT_ERR_NOT_ADJACENT: return S_MSG_ATTACK_FAILED;
@@ -474,8 +493,8 @@ static void update_menu(MapView *view, World *world, Map *map) {
         return;
     }
 
-    int actions[4];
-    StrId labels[4];
+    int actions[ACTION_MENU_MAX];
+    StrId labels[ACTION_MENU_MAX];
     int count = menu_actions(world, map, unit, actions, labels);
     if (view->menu_selection >= count) view->menu_selection = 0;
     if (Input_Repeated(PSP_CTRL_UP)) {
@@ -491,6 +510,29 @@ static void update_menu(MapView *view, World *world, Map *map) {
     if (!Input_Pressed(PSP_CTRL_CROSS)) return;
 
     int action = actions[view->menu_selection];
+    if (action == MENU_AUTO_EXPLORE) {
+        int enabled = !Unit_AutoExploreEnabled(unit);
+        Unit_SetAutoExplore(unit, enabled);
+        view->menu_open = 0;
+        if (enabled) {
+            int steps = World_AutoExploreScout(world, map, view->selected);
+            World_UpdateVision(world, map);
+            view->cursor_x = unit->x;
+            view->cursor_y = unit->y;
+            ensure_cursor_visible(view);
+            update_reachable(view, world, map);
+            if (steps > 0) Audio_PlaySfx(AUDIO_SFX_MOVE);
+            set_message(view, Str(steps > 0 ? S_MSG_AUTO_EXPLORE_ON
+                                             : S_MSG_NO_EXPLORE));
+            Log_Printf("unit: auto-explore on at %d,%d steps=%d moves_left=%d",
+                       unit->x, unit->y, steps, unit->moves_left);
+        } else {
+            set_message(view, Str(S_MSG_AUTO_EXPLORE_OFF));
+            Log_Printf("unit: auto-explore off at %d,%d", unit->x, unit->y);
+        }
+        return;
+    }
+
     if (action == MENU_GARRISON) {
         int garrison_city = garrison_city_for(world, map, unit);
         if (garrison_city < 0) {
@@ -541,6 +583,33 @@ static void update_menu(MapView *view, World *world, Map *map) {
         } else {
             view->menu_open = 0;
             set_message(view, Str(S_MSG_CITY_REPAIR_NONE));
+        }
+        return;
+    }
+
+    if (action == MENU_CHOP) {
+        int ux = unit->x;
+        int uy = unit->y;
+        int city_index = -1;
+        int result = Improvement_ChopForest(map, &world->cities, unit,
+                                            &city_index);
+        view->menu_open = 0;
+        if (result == IMPROVEMENT_OK) {
+            Audio_PlaySfx(AUDIO_SFX_BUILD);
+            char msg[96];
+            snprintf(msg, sizeof(msg), Str(S_MSG_CHOPPED),
+                     IMPROVEMENT_FOREST_CHOP_PRODUCTION);
+            const City *city = &world->cities.cities[city_index];
+            Log_Printf("unit: chopped forest at %d,%d city=%s prod=%d stored=%d",
+                       ux, uy, Str(Data_CityName(city->name_index)),
+                       IMPROVEMENT_FOREST_CHOP_PRODUCTION,
+                       city->production_stored);
+            advance_after_action(view, world, map);
+            set_message(view, msg);
+        } else {
+            Log_Printf("unit: chop failed at %d,%d result=%d",
+                       ux, uy, result);
+            set_message(view, Str(improvement_error_str(result)));
         }
         return;
     }
@@ -869,6 +938,11 @@ int MapView_Update(MapView *view, Map *map, World *world) {
         if (keep >= 0 && keep < world->units.count
             && world->units.units[keep].owner == WORLD_CIV_PLAYER) {
             view->selected = keep;
+            if (Unit_AutoExploreEnabled(&world->units.units[keep])) {
+                view->cursor_x = world->units.units[keep].x;
+                view->cursor_y = world->units.units[keep].y;
+                ensure_cursor_visible(view);
+            }
             update_reachable(view, world, map);
         } else {
             int first = World_FirstUnitWithMoves(world);
@@ -969,6 +1043,35 @@ static void draw_improvement_marker(float sx, float sy, int improvement) {
     }
 }
 
+static void draw_tile_transitions(const MapView *view, const Map *map,
+                                  int x, int y, float sx, float sy) {
+    static const int dx[4] = { -1, 1, 0, 0 };
+    static const int dy[4] = { 0, 0, -1, 1 };
+    const MapTile *tile = &map->tiles[y][x];
+
+    for (int dir = 0; dir < 4; dir++) {
+        int nx = x + dx[dir];
+        int ny = y + dy[dir];
+        if (nx < 0 || nx >= MAP_WIDTH || ny < 0 || ny >= MAP_HEIGHT) continue;
+        const MapTile *neighbor = &map->tiles[ny][nx];
+        /* Only blend toward explored terrain.  Blending toward an unexplored
+         * tile would leak its terrain through the fog. */
+        if (!neighbor->explored || neighbor->terrain == tile->terrain) {
+            continue;
+        }
+
+        /* Inset half a texel so linear filtering never samples the adjacent
+         * atlas row/column at a tile edge. */
+        float u0 = (float)(dir * TRANSITION_TILE_W) + 0.5f;
+        float v0 = (float)((int)neighbor->terrain * TRANSITION_TILE_H) + 0.5f;
+        Render_DrawTransitionSprite(sx, sy, MAP_TILE_PX, MAP_TILE_PX,
+                                    u0, v0,
+                                    u0 + TRANSITION_TILE_W - 1.0f,
+                                    v0 + TRANSITION_TILE_H - 1.0f,
+                                    0xFFFFFFFFu);
+    }
+}
+
 static void draw_map_tiles(const MapView *view, const Map *map) {
     int first_col = (int)(view->cam_x / (float)MAP_TILE_PX);
     int first_row = (int)(view->cam_y / (float)MAP_TILE_PX);
@@ -980,6 +1083,8 @@ static void draw_map_tiles(const MapView *view, const Map *map) {
     if (last_col >= MAP_WIDTH) last_col = MAP_WIDTH - 1;
     if (last_row >= MAP_HEIGHT) last_row = MAP_HEIGHT - 1;
 
+    /* Base terrain and its soft edge transitions are flushed before resource
+     * icons and improvements so those details stay crisp on top. */
     for (int y = first_row; y <= last_row; y++) {
         for (int x = first_col; x <= last_col; x++) {
             const MapTile *tile = &map->tiles[y][x];
@@ -1001,6 +1106,17 @@ static void draw_map_tiles(const MapView *view, const Map *map) {
                               u0 + TERRAIN_ATLAS_TILE_W,
                               v0 + TERRAIN_ATLAS_TILE_H,
                               0xFFFFFFFFu);
+            draw_tile_transitions(view, map, x, y, sx, sy);
+        }
+    }
+    Render_FlushLayer();
+
+    for (int y = first_row; y <= last_row; y++) {
+        for (int x = first_col; x <= last_col; x++) {
+            const MapTile *tile = &map->tiles[y][x];
+            if (!tile->explored) continue;
+            float sx = (float)(x * MAP_TILE_PX) - view->cam_x;
+            float sy = (float)MAP_VIEW_Y + (float)(y * MAP_TILE_PX) - view->cam_y;
 
             if (tile->resource != RESOURCE_NONE) {
                 int rcol = (int)tile->resource - 1;
@@ -1102,6 +1218,7 @@ static void draw_entities(const MapView *view, const Map *map,
         if (unit->type == UNIT_SETTLER) sprite = 0;
         else if (unit->type == UNIT_SCOUT) sprite = 2;
         else if (unit->type == UNIT_WORKER) sprite = 4;
+        else if (unit->type == UNIT_MEDIC) sprite = 5;
 
         draw_atlas_sprite(view, unit->x, unit->y, sprite, unit->owner);
         float sx = (float)(unit->x * MAP_TILE_PX) - view->cam_x;
@@ -1182,12 +1299,17 @@ static void draw_hud(const MapView *view, const Map *map, const World *world) {
 
     if (unit_index >= 0) {
         const Unit *unit = &world->units.units[unit_index];
-        snprintf(buf, sizeof(buf), "%s%s %s %d/%d  %s %d  %s",
+        char auto_suffix[16] = "";
+        if (Unit_AutoExploreEnabled(unit)) {
+            snprintf(auto_suffix, sizeof(auto_suffix), " %s",
+                     Str(S_MAP_AUTO));
+        }
+        snprintf(buf, sizeof(buf), "%s%s %s %d/%d  %s %d  %s%s",
                  view->selected == unit_index ? "> " : "",
                  Str(unit_str(unit->type)), Str(S_MAP_MOVES),
                  unit->moves_left, Unit_TypeMovePoints(unit->type),
                  Str(S_MAP_HP), unit->hp,
-                 Str(World_CivNameId(unit->owner)));
+                 Str(World_CivNameId(unit->owner)), auto_suffix);
         Text_Draw(buf, 8, SCREEN_HEIGHT - 19, 1,
                   view->selected == unit_index
                       ? COLOR_GOLD : World_CivColor(unit->owner));
@@ -1199,10 +1321,16 @@ static void draw_hud(const MapView *view, const Map *map, const World *world) {
         Text_Draw(buf, 8, SCREEN_HEIGHT - 19, 1,
                   World_CivColor(city->owner));
     } else if (selected) {
-        snprintf(buf, sizeof(buf), "%s %s %d/%d  %s %d", Str(unit_str(selected->type)),
+        char auto_suffix[16] = "";
+        if (Unit_AutoExploreEnabled(selected)) {
+            snprintf(auto_suffix, sizeof(auto_suffix), " %s",
+                     Str(S_MAP_AUTO));
+        }
+        snprintf(buf, sizeof(buf), "%s %s %d/%d  %s %d%s",
+                 Str(unit_str(selected->type)),
                  Str(S_MAP_MOVES), selected->moves_left,
                  Unit_TypeMovePoints(selected->type), Str(S_MAP_HP),
-                 selected->hp);
+                 selected->hp, auto_suffix);
         Text_Draw(buf, 8, SCREEN_HEIGHT - 19, 1, COLOR_GOLD);
     } else {
         Text_Draw(Str(S_MAP_CONTROLS), 8, SCREEN_HEIGHT - 19, 1, COLOR_MUTED);
@@ -1459,8 +1587,8 @@ static void draw_action_menu(const MapView *view, const Map *map,
     const Unit *unit = selected_unit_const(world, view);
     if (!view->menu_open || !unit) return;
 
-    int actions[4];
-    StrId items[4];
+    int actions[ACTION_MENU_MAX];
+    StrId items[ACTION_MENU_MAX];
     int count = menu_actions(world, map, unit, actions, items);
     const float w = 156.0f;
     const float item_h = 18.0f;

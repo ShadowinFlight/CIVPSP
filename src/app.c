@@ -19,6 +19,7 @@
 #include "render.h"
 #include "rng.h"
 #include "save.h"
+#include "tech.h"
 #include "text.h"
 #include "turn_report.h"
 #include "world.h"
@@ -789,12 +790,35 @@ static void update_ui_audio(void) {
     }
 }
 
+/* Menus share the ancient/peace loop so title music stays consistent.  Once
+ * play has started the loop follows the player's highest era and whether a
+ * living major rival is still at war. */
+static AudioMusic music_for_state(AppState state) {
+    switch (state) {
+        case STATE_MAP:
+        case STATE_CITY:
+        case STATE_DIPLOMACY:
+        case STATE_PAUSE:
+        case STATE_SAVE_MENU:
+        case STATE_LOAD_MENU:
+        case STATE_GAME_OVER: {
+            int era = World_PlayerEra(&app.world);
+            if (era < 0 || era >= ERA_COUNT) era = ERA_ANCIENT;
+            int mood = World_PlayerAtWar(&app.world) ? 1 : 0;
+            return (AudioMusic)(era * 2 + mood);
+        }
+        default:
+            return AUDIO_MUSIC_ANCIENT_PEACE;
+    }
+}
+
 void App_Update(void) {
     AppState before = app.state;
     app.frame++;
     if (app.toast_timer > 0) app.toast_timer--;
     update_game_clock();
     update_ui_audio();
+    Audio_SetMusicTrack(music_for_state(app.state));
 
     if (app.report_open) {
         update_turn_report();
@@ -866,6 +890,26 @@ static void draw_background(void) {
     Render_DrawRect(0, SCREEN_HEIGHT - 42, SCREEN_WIDTH, 42, 0xCC0A1116u);
     Render_DrawRect(0, 63, SCREEN_WIDTH, 1, COLOR_GOLD);
     Render_DrawRect(0, SCREEN_HEIGHT - 43, SCREEN_WIDTH, 1, 0x663E5A5C);
+}
+
+/* Layered text gives the menu headings a stamped-metal look.  The font atlas
+ * already carries antialiased coverage, and switching the sampler to linear
+ * filtering softens the large 2x/3x glyph edges further. */
+static void draw_gold_title(const char *text, float y, int scale) {
+    float w = (float)Text_Width(text, scale);
+    float x = SCREEN_WIDTH / 2.0f - w * 0.5f;
+
+    Render_FlushLayer();
+    Render_SetTextSmooth(1);
+
+    Text_Draw(text, x + 2.0f, y + 4.0f, scale, 0x99100704u);
+    Text_Draw(text, x - 1.0f, y - 1.0f, scale, 0xCCFFF4C8u);
+    Text_Draw(text, x + 1.0f, y + 2.0f, scale, 0xFF321D05u);
+    Text_Draw(text, x, y + 1.0f, scale, 0xFF8B5810u);
+    Text_Draw(text, x, y, scale, 0xFFF0C75Eu);
+
+    Render_FlushLayer();
+    Render_SetTextSmooth(0);
 }
 
 static float menu_slide(int index) {
@@ -1091,8 +1135,7 @@ static const HelpPage help_pages[HELP_PAGE_COUNT] = {
 
 static void render_help(void) {
     draw_background();
-    Text_DrawCentered(Str(S_HELP_TITLE), SCREEN_WIDTH / 2.0f, 32, 2,
-                      COLOR_GOLD);
+    draw_gold_title(Str(S_HELP_TITLE), 32, 2);
     Render_DrawRect(60, 66, SCREEN_WIDTH - 120, 1, 0x663E5A5C);
 
     Text_DrawCentered(Str(help_pages[app.help_page].title),
@@ -1115,7 +1158,7 @@ static void render_help(void) {
 static void render_main_menu(void) {
     draw_background();
 
-    Text_DrawCentered(Str(S_TITLE), SCREEN_WIDTH / 2.0f, 34, 3, COLOR_GOLD);
+    draw_gold_title(Str(S_TITLE), 34, 3);
     Text_DrawCentered(Str(S_SUBTITLE), SCREEN_WIDTH / 2.0f, 76, 1, COLOR_MUTED);
 
     draw_menu_item(0, Str(S_MENU_NEW_GAME), 98);
@@ -1134,8 +1177,7 @@ static void render_main_menu(void) {
 
 static void render_options(void) {
     draw_background();
-    Text_DrawCentered(Str(S_OPTIONS_TITLE), SCREEN_WIDTH / 2.0f, 34, 2,
-                      COLOR_GOLD);
+    draw_gold_title(Str(S_OPTIONS_TITLE), 34, 2);
     Render_DrawRect(60, 68, SCREEN_WIDTH - 120, 1, 0x663E5A5C);
 
     draw_value_row(0, Str(S_OPTIONS_LANGUAGE),
@@ -1161,8 +1203,7 @@ static void render_options(void) {
 static void render_new_game(void) {
     char value[48];
     draw_background();
-    Text_DrawCentered(Str(S_NEW_GAME_TITLE), SCREEN_WIDTH / 2.0f, 32, 2,
-                      COLOR_GOLD);
+    draw_gold_title(Str(S_NEW_GAME_TITLE), 32, 2);
     Render_DrawRect(60, 66, SCREEN_WIDTH - 120, 1, 0x663E5A5C);
 
     draw_value_row(0, Str(S_NEW_GAME_MODE),
@@ -1194,8 +1235,7 @@ static void render_pause(void) {
     Render_DrawRect(64, 26, SCREEN_WIDTH - 128, 1, COLOR_GOLD);
     /* Cover the map HUD so the pause footer stays readable. */
     Render_DrawRect(0, SCREEN_HEIGHT - 38, SCREEN_WIDTH, 38, 0xFF0A1116u);
-    Text_DrawCentered(Str(S_PAUSE_TITLE), SCREEN_WIDTH / 2.0f, 28, 2,
-                      COLOR_GOLD);
+    draw_gold_title(Str(S_PAUSE_TITLE), 28, 2);
 
     draw_menu_item(0, Str(S_PAUSE_RESUME), 68);
     draw_menu_item(1, Str(S_PAUSE_SAVE), 94);
@@ -1210,8 +1250,7 @@ static void render_pause(void) {
 
 static void render_save_menu(void) {
     draw_background();
-    Text_DrawCentered(Str(S_SAVE_TITLE), SCREEN_WIDTH / 2.0f, 34, 2,
-                      COLOR_GOLD);
+    draw_gold_title(Str(S_SAVE_TITLE), 34, 2);
     Render_DrawRect(60, 68, SCREEN_WIDTH - 120, 1, 0x663E5A5C);
     for (int i = 0; i < 3; i++) {
         draw_slot_row(i, i + SAVE_SLOT_FIRST, 86.0f + (float)i * 38.0f);
@@ -1223,8 +1262,7 @@ static void render_save_menu(void) {
 
 static void render_load_menu(void) {
     draw_background();
-    Text_DrawCentered(Str(S_LOAD_TITLE), SCREEN_WIDTH / 2.0f, 34, 2,
-                      COLOR_GOLD);
+    draw_gold_title(Str(S_LOAD_TITLE), 34, 2);
     Render_DrawRect(60, 68, SCREEN_WIDTH - 120, 1, 0x663E5A5C);
     for (int slot = 0; slot <= SAVE_SLOT_LAST; slot++) {
         draw_slot_row(slot, slot, 80.0f + (float)slot * 34.0f);

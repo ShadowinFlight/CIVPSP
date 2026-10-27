@@ -364,6 +364,26 @@ int World_PlayerTechCount(const World *world) {
     return world ? Tech_CountKnown(world->researched) : 0;
 }
 
+int World_PlayerEra(const World *world) {
+    int era = ERA_ANCIENT;
+    if (!world) return era;
+    for (int tech = 1; tech < TECH_COUNT; tech++) {
+        if (!Tech_IsKnown(world->researched, tech)) continue;
+        int tech_era = Tech_Era(tech);
+        if (tech_era > era) era = tech_era;
+    }
+    return era;
+}
+
+int World_PlayerAtWar(const World *world) {
+    if (!world) return 0;
+    for (int civ = 1; civ <= WORLD_AI_COUNT; civ++) {
+        if (!world->civs[civ].active) continue;
+        if (World_AreAtWar(world, START_OWNER, civ)) return 1;
+    }
+    return 0;
+}
+
 /* AI research is abstracted as one new tech every eight turns.  It is derived
  * from the turn counter instead of stored in CivState, so M7 version-2 saves
  * keep the same layout and remain loadable. */
@@ -823,6 +843,25 @@ static int city_owns_unit_tile(const World *world, int owner, int x, int y) {
     return 0;
 }
 
+static int medic_support_at(const World *world, const Unit *unit) {
+    for (int i = 0; i < world->units.count; i++) {
+        const Unit *medic = &world->units.units[i];
+        if (medic == unit) continue;
+        if (medic->owner != unit->owner) continue;
+        if (medic->type != UNIT_MEDIC) continue;
+        if (medic->hp == 0) continue;
+        int dx = medic->x > unit->x ? medic->x - unit->x
+                                    : unit->x - medic->x;
+        int dy = medic->y > unit->y ? medic->y - unit->y
+                                    : unit->y - medic->y;
+        if (dx <= UNIT_MEDIC_HEAL_RADIUS
+            && dy <= UNIT_MEDIC_HEAL_RADIUS) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 static void heal_units(World *world, Map *map) {
     (void)map;
     for (int i = 0; i < world->units.count; i++) {
@@ -830,13 +869,128 @@ static void heal_units(World *world, Map *map) {
         if (unit->hp == 0 || unit->hp > UNIT_HP_MAX) unit->hp = UNIT_HP_MAX;
         if (unit->hp >= UNIT_HP_MAX) continue;
         /* Units that moved or attacked do not recover until a full turn of
-         * rest.  Friendly territory heals twice as fast as neutral ground. */
+         * rest.  Friendly territory heals twice as fast as neutral ground.
+         * One adjacent medic adds a flat bonus; additional medics do not
+         * stack, so a tight formation cannot become an instant heal engine. */
         int full = Unit_TypeMovePoints(unit->type);
         if (unit->moves_left != full) continue;
         int heal = city_owns_unit_tile(world, unit->owner, unit->x, unit->y)
                        ? 20 : 10;
+        if (medic_support_at(world, unit)) heal += UNIT_MEDIC_HEAL_BONUS;
         int hp = (int)unit->hp + heal;
         unit->hp = (uint8_t)(hp > UNIT_HP_MAX ? UNIT_HP_MAX : hp);
+    }
+}
+
+/* Breadth-first search for the closest unexplored passable tile.  Units and
+ * city tiles are treated as blockers so auto-explore never walks into a
+ * settlement or stacks on another unit.  The map terrain is fully known to
+ * the pathfinder (as with manual movement), but only explored tiles are
+ * targeted. */
+static int auto_explore_target(const World *world, const Map *map, int self,
+                               int *target_x, int *target_y) {
+    static uint8_t visited[MAP_TILE_COUNT];
+    static int16_t queue[MAP_TILE_COUNT];
+    static const int dx[8] = { -1, 0, 1, -1, 1, -1, 0, 1 };
+    static const int dy[8] = { -1, -1, -1, 0, 0, 1, 1, 1 };
+
+    const Unit *unit = &world->units.units[self];
+    int start = unit->y * MAP_WIDTH + unit->x;
+    memset(visited, 0, sizeof(visited));
+    int head = 0;
+    int tail = 0;
+    visited[start] = 1;
+    queue[tail++] = (int16_t)start;
+
+    while (head < tail) {
+        int node = queue[head++];
+        int x = node % MAP_WIDTH;
+        int y = node / MAP_WIDTH;
+        const MapTile *tile = &map->tiles[y][x];
+        if (node != start && !tile->explored) {
+            *target_x = x;
+            *target_y = y;
+            return 1;
+        }
+
+        for (int i = 0; i < 8; i++) {
+            int nx = x + dx[i];
+            int ny = y + dy[i];
+            if (nx < 0 || nx >= MAP_WIDTH || ny < 0 || ny >= MAP_HEIGHT) {
+                continue;
+            }
+            int next = ny * MAP_WIDTH + nx;
+            if (visited[next]) continue;
+            if (!Unit_PassableTile(map, nx, ny)) continue;
+            if (Unit_IndexOfAt(&world->units, nx, ny) >= 0) continue;
+            if (City_IndexOfAt(&world->cities, nx, ny) >= 0) continue;
+            visited[next] = 1;
+            queue[tail++] = (int16_t)next;
+        }
+    }
+    return 0;
+}
+
+int World_AutoExploreScout(World *world, Map *map, int unit_index) {
+    if (!world || !map || unit_index < 0
+        || unit_index >= world->units.count) {
+        return 0;
+    }
+    Unit *unit = &world->units.units[unit_index];
+    if (unit->owner != START_OWNER || unit->type != UNIT_SCOUT
+        || !Unit_AutoExploreEnabled(unit)) {
+        return 0;
+    }
+
+    int steps = 0;
+    while (unit->moves_left >= 2 && steps < 32) {
+        int tx = 0;
+        int ty = 0;
+        if (!auto_explore_target(world, map, unit_index, &tx, &ty)) break;
+
+        int nx = tx;
+        int ny = ty;
+        int path = Unit_PathNextStep(&world->units, map, unit_index,
+                                     tx, ty, &nx, &ny);
+        if (path == 0) {
+            int dx = tx > unit->x ? tx - unit->x : unit->x - tx;
+            int dy = ty > unit->y ? ty - unit->y : unit->y - ty;
+            if (dx <= 1 && dy <= 1) {
+                nx = tx;
+                ny = ty;
+            } else {
+                break;
+            }
+        } else if (path < 0) {
+            break;
+        }
+
+        if (City_IndexOfAt(&world->cities, nx, ny) >= 0) break;
+        int cost = Unit_MoveTo(&world->units, map, unit_index, nx, ny);
+        if (cost < 0) break;
+
+        /* Manual moves call World_UpdateVision immediately.  Auto-explore
+         * runs several steps in one go, so reveal after each step to keep the
+         * next target search honest and the map fog current. */
+        Map_MarkVisibleArea(map, unit->x, unit->y,
+                            Unit_TypeSight(unit->type));
+        steps++;
+    }
+
+    if (steps > 0) {
+        Log_Printf("auto-explore: unit=%d steps=%d at=%d,%d moves_left=%d",
+                   unit_index, steps, unit->x, unit->y, unit->moves_left);
+    }
+    return steps;
+}
+
+void World_AutoExploreScouts(World *world, Map *map) {
+    if (!world || !map) return;
+    for (int i = 0; i < world->units.count; i++) {
+        const Unit *unit = &world->units.units[i];
+        if (unit->owner != START_OWNER || unit->type != UNIT_SCOUT) continue;
+        if (!Unit_AutoExploreEnabled(unit)) continue;
+        (void)World_AutoExploreScout(world, map, i);
     }
 }
 
@@ -851,6 +1005,7 @@ void World_EndTurn(World *world, Map *map) {
     Diplomacy_ProcessTurn(world);
     heal_units(world, map);
     Unit_ResetTurn(&world->units);
+    World_AutoExploreScouts(world, map);
     world->turn++;
     World_UpdateVision(world, map);
     if (world->notice[0] != '\0') {

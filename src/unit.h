@@ -8,6 +8,17 @@
 #define UNIT_MAX 64
 #define UNIT_HP_MAX 100
 
+/* A medic passively improves healing for friendly units within this Chebyshev
+ * radius, including diagonals.  Multiple medics do not stack. */
+#define UNIT_MEDIC_HEAL_RADIUS 1
+#define UNIT_MEDIC_HEAL_BONUS 10
+
+/* Unit.acted is saved as a single byte.  The low bits keep the existing
+ * "already acted" bookkeeping, while the high bit stores the scout's
+ * auto-explore toggle without changing the version-3 save layout. */
+#define UNIT_ACTED_MASK         0x7Fu
+#define UNIT_AUTO_EXPLORE_FLAG  0x80u
+
 typedef enum {
     UNIT_SETTLER = 0,
     UNIT_WARRIOR,
@@ -15,6 +26,7 @@ typedef enum {
     UNIT_SWORDSMAN,
     UNIT_HORSEMAN,
     UNIT_WORKER,
+    UNIT_MEDIC,
     UNIT_TYPE_COUNT
 } UnitType;
 
@@ -72,6 +84,8 @@ int Unit_PathCost(const UnitPool *pool, const Map *map, const Unit *unit,
 int Unit_MoveTo(UnitPool *pool, const Map *map, int index, int tx, int ty);
 
 void Unit_ResetTurn(UnitPool *pool);
+int Unit_AutoExploreEnabled(const Unit *unit);
+void Unit_SetAutoExplore(Unit *unit, int enabled);
 void Unit_GrantVision(const UnitPool *pool, Map *map);
 void Unit_GrantVisionOwner(const UnitPool *pool, Map *map, int owner);
 

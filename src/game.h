@@ -7,7 +7,7 @@
 #define SCREEN_HEIGHT  272
 #define BUFFER_WIDTH   512
 
-#define VERSION_STRING "V0.2.2"
+#define VERSION_STRING "V0.3.1"
 
 /* GU colours are AABBGGRR.  The UI source colours are written as AARRGGBB
  * (the convention used by most web/art tools), then converted here. */

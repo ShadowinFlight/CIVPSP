@@ -10,9 +10,11 @@
 #include "gen/font_en.h"
 #include "gen/font_zh.h"
 #include "gen/terrain_gen.h"
+#include "gen/transition_gen.h"
 
 #define MAX_RECTS 1024
 #define MAX_SPRITES 2048
+#define MAX_TRANSITION_SPRITES 4096
 #define MAX_TEXT_QUADS 2048
 
 unsigned int __attribute__((aligned(16))) render_list[524288]; /* 2MB */
@@ -47,6 +49,8 @@ _Static_assert(sizeof(struct SpriteV) == 24, "GU sprite vertex must be 24 bytes"
  * overwrite the vertices after the uncached store. */
 static struct RectV rect_buf[MAX_RECTS * 2] __attribute__((aligned(64)));
 static struct SpriteV sprite_buf[MAX_SPRITES * 2] __attribute__((aligned(64)));
+static struct SpriteV transition_buf[MAX_TRANSITION_SPRITES * 2]
+    __attribute__((aligned(64)));
 static struct TextV text_buf[MAX_TEXT_QUADS * 2] __attribute__((aligned(64)));
 static struct SpriteV minimap_buf[2] __attribute__((aligned(64)));
 static int minimap_active;
@@ -55,9 +59,14 @@ static int minimap_tex_w;
 static int minimap_tex_h;
 
 static int font_language;
+static int text_smooth;
 
 void Render_SetFontLanguage(int language) {
     font_language = language == 1 ? 1 : 0;
+}
+
+void Render_SetTextSmooth(int smooth) {
+    text_smooth = smooth ? 1 : 0;
 }
 
 static void setup_font_texture(void) {
@@ -77,7 +86,8 @@ static void setup_font_texture(void) {
     sceGuTexEnvColor(0);
     sceGuTexOffset(0.0f, 0.0f);
     sceGuTexWrap(GU_REPEAT, GU_REPEAT);
-    sceGuTexFilter(GU_NEAREST, GU_NEAREST);
+    int filter = text_smooth ? GU_LINEAR : GU_NEAREST;
+    sceGuTexFilter(filter, filter);
 }
 
 static void setup_terrain_texture(void) {
@@ -93,10 +103,27 @@ static void setup_terrain_texture(void) {
     sceGuTexFilter(GU_NEAREST, GU_NEAREST);
 }
 
+static void setup_transition_texture(void) {
+    sceGuTexMode(GU_PSM_8888, 0, 0, 0);
+    sceGuTexImage(0, TRANSITION_ATLAS_W, TRANSITION_ATLAS_H,
+                  TRANSITION_ATLAS_W, transition_atlas_rgba);
+    sceGuTexFunc(GU_TFX_MODULATE, GU_TCC_RGBA);
+    sceGuTexEnvColor(0);
+    sceGuTexOffset(0.0f, 0.0f);
+    sceGuTexScale(1.0f / (float)TRANSITION_ATLAS_W,
+                  1.0f / (float)TRANSITION_ATLAS_H);
+    sceGuTexWrap(GU_CLAMP, GU_CLAMP);
+    /* Linear filtering turns the generated alpha ramp into a soft edge at
+     * 24px tile scale. */
+    sceGuTexFilter(GU_LINEAR, GU_LINEAR);
+}
+
 static int rect_count;
 static int rect_base;
 static int sprite_count;
 static int sprite_base;
+static int transition_count;
+static int transition_base;
 static int text_count;
 static int text_base;
 static unsigned int clear_color = 0xFF141C24; /* AARRGGBB */
@@ -134,6 +161,8 @@ void Render_Init(void) {
     sceKernelDcacheWritebackRange((void *)font_en_rgba, sizeof(font_en_rgba));
     sceKernelDcacheWritebackRange((void *)font_zh_rgba, sizeof(font_zh_rgba));
     sceKernelDcacheWritebackRange((void *)terrain_atlas_5551, sizeof(terrain_atlas_5551));
+    sceKernelDcacheWritebackRange((void *)transition_atlas_rgba,
+                                  sizeof(transition_atlas_rgba));
 
     sceGuScissor(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT);
     sceGuEnable(GU_SCISSOR_TEST);
@@ -166,6 +195,7 @@ void Render_Init(void) {
 void Render_BeginFrame(void) {
     rect_count = rect_base = 0;
     sprite_count = sprite_base = 0;
+    transition_count = transition_base = 0;
     text_count = text_base = 0;
     minimap_active = 0;
 
@@ -210,6 +240,27 @@ void Render_DrawSprite(float x, float y, float w, float h,
     v[1].y = y + h;
     v[1].z = 0.5f;
     sprite_count++;
+}
+
+void Render_DrawTransitionSprite(float x, float y, float w, float h,
+                                 float u0, float v0, float u1, float v1,
+                                 unsigned int color) {
+    if (transition_count >= MAX_TRANSITION_SPRITES) return;
+    struct SpriteV *v = &transition_buf[transition_count * 2];
+    unsigned int c = FIXC(color);
+    v[0].u = u0;
+    v[0].v = v0;
+    v[0].color = c;
+    v[0].x = x;
+    v[0].y = y;
+    v[0].z = 0.5f;
+    v[1].u = u1;
+    v[1].v = v1;
+    v[1].color = c;
+    v[1].x = x + w;
+    v[1].y = y + h;
+    v[1].z = 0.5f;
+    transition_count++;
 }
 
 void Render_DrawTextQuad(float x, float y, float w, float h,
@@ -282,6 +333,19 @@ static void flush_sprites(void) {
     sprite_base = sprite_count;
 }
 
+static void flush_transitions(void) {
+    if (transition_count <= transition_base) return;
+    struct SpriteV *v = transition_buf + transition_base * 2;
+    int count = (transition_count - transition_base) * 2;
+    sceKernelDcacheWritebackRange(v, (unsigned int)(count * sizeof(*v)));
+    sceGuEnable(GU_TEXTURE_2D);
+    setup_transition_texture();
+    sceGuDrawArray(GU_SPRITES,
+                   GU_TEXTURE_32BITF | GU_COLOR_8888 | GU_VERTEX_32BITF | GU_TRANSFORM_2D,
+                   count, NULL, v);
+    transition_base = transition_count;
+}
+
 static void flush_text(void) {
     if (text_count <= text_base) return;
     struct TextV *v = text_buf + text_base * 2;
@@ -320,6 +384,7 @@ static void flush_minimap(void) {
 
 void Render_FlushLayer(void) {
     flush_sprites();
+    flush_transitions();
     flush_rects();
     flush_minimap();
     flush_text();

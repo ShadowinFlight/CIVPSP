@@ -94,6 +94,10 @@ const ProductionDef g_production_defs[PROD_COUNT] = {
         S_UNIT_WORKER, PROD_KIND_UNIT, UNIT_WORKER, 0, 10, 0,
         0, 0, 0, 0, 0, 0, TECH_NONE
     },
+    [PROD_MEDIC] = {
+        S_UNIT_MEDIC, PROD_KIND_UNIT, UNIT_MEDIC, 0, 12, 0,
+        0, 0, 0, 0, 0, 0, TECH_NONE
+    },
 };
 
 const StrId g_city_name_ids[CITY_NAME_COUNT] = {
@@ -208,6 +212,7 @@ StrId Data_UnitName(int unit_type) {
         case UNIT_SWORDSMAN: return S_UNIT_SWORDSMAN;
         case UNIT_HORSEMAN:  return S_UNIT_HORSEMAN;
         case UNIT_WORKER:    return S_UNIT_WORKER;
+        case UNIT_MEDIC:     return S_UNIT_MEDIC;
         default:             return S_UNIT_WARRIOR;
     }
 }

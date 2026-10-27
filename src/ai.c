@@ -542,7 +542,8 @@ static void ai_process_units(World *world, Map *map, int owner) {
         int index = -1;
         for (int i = 0; i < world->units.count; i++) {
             const Unit *unit = &world->units.units[i];
-            if (unit->owner == owner && !unit->acted
+            if (unit->owner == owner
+                && (unit->acted & UNIT_ACTED_MASK) == 0
                 && unit->moves_left > 0) {
                 index = i;
                 break;
