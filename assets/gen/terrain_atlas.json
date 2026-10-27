@@ -1,5 +1,5 @@
 {
-  "atlas_w": 128,
+  "atlas_w": 256,
   "atlas_h": 256,
   "tile_w": 24,
   "tile_h": 24,
@@ -30,6 +30,7 @@
     "warrior",
     "scout",
     "city",
-    "worker"
+    "worker",
+    "medic"
   ]
 }

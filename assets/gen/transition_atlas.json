@@ -1,0 +1,25 @@
+{
+  "atlas_w": 128,
+  "atlas_h": 256,
+  "tile_w": 24,
+  "tile_h": 24,
+  "cols": 4,
+  "rows": 9,
+  "directions": [
+    "left",
+    "right",
+    "up",
+    "down"
+  ],
+  "terrain": [
+    "grassland",
+    "plains",
+    "forest",
+    "hills",
+    "mountain",
+    "desert",
+    "tundra",
+    "coast",
+    "ocean"
+  ]
+}
